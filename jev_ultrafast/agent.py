@@ -1,22 +1,34 @@
 """The complete agent loop. Typed choices, observable state, bounded execution."""
 
 import base64
+import os
+import re
 import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
-from .model import action_space, choose, field_context, field_text
+from .model import action_space, choose, choose_vision, field_context, field_text
 from .questions import MAX_STEPS
+
+# Irreversible or outward-facing clicks. Code-owned, so a model cannot talk its way past the gate.
+SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign|apply|delete|checkout)\b", re.I)
 
 
 class Agent:
-    def __init__(self, url, goals, *, record_dir=None, screenshots=False):
+    profile = approve = None
+    files = ()
+
+    def __init__(self, url, goals, *, record_dir=None, screenshots=False, profile=None, approve=None, files=()):
         task = goals.strip() if isinstance(goals, str) else "\n".join(goals).strip()
         if not task:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
+        self.profile = profile
+        self.approve = approve
+        self.files = [str(Path(f).resolve()) for f in files]
         self.browser = Browser(url)
+        self.browser.allow_upload = bool(self.files)
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
         try:
@@ -75,6 +87,33 @@ class Agent:
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
             state["decision"] = choose(state["page"], state["goal"], state["history"])
+
+            # 2-Gear Hybrid Switch: Wake up Gear 2 (Multimodal VLM) if Gear 1 is low-confidence, blocked, or looping
+            gear2_on = os.environ.get("GEAR2", "1") == "1"
+            low_conf = state["decision"].get("confidence", 1.0) < float(
+                os.environ.get("GEAR2_CONFIDENCE_THRESHOLD", "0.65")
+            )
+            is_blocked = state["decision"].get("choice") == "BLOCKED"
+            is_looping = (
+                len(state["history"]) >= 2
+                and all(h.get("page_changed") is False and h.get("kind") != "wait" for h in state["history"][-2:])
+            )
+            if gear2_on and (low_conf or is_blocked or is_looping):
+                trigger_reason = (
+                    "looping with no change"
+                    if is_looping
+                    else ("low confidence" if low_conf else "gear 1 chose BLOCKED")
+                )
+                try:
+                    screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
+                    state["decision"] = choose_vision(
+                        state["page"], state["goal"], state["history"], screenshot, reason=trigger_reason
+                    )
+                except Exception:
+                    state["decision"]["gear"] = 1
+            else:
+                state["decision"]["gear"] = 1
+
             state["decisions"].append(
                 {
                     **state["decision"],
@@ -98,7 +137,16 @@ class Agent:
                 state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
                 return self.snapshot()
-            action = next(a for a in page["actions"] if a["id"] == selected)
+            if selected == "CLICK_COORDS":
+                action = {
+                    "id": "coords",
+                    "kind": "coords",
+                    "label": f"Click ({decision.get('x')}, {decision.get('y')})",
+                    "x": int(decision["x"]),
+                    "y": int(decision["y"]),
+                }
+            else:
+                action = next(a for a in page["actions"] if a["id"] == selected)
             if len(state["history"]) >= MAX_STEPS:
                 state["status"] = "blocked"
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
@@ -106,13 +154,25 @@ class Agent:
             if action["kind"] == "fill":
                 if not state["browser"].fresh(page):
                     raise StalePage("Page changed before text generation. Choose again.")
-                context = field_context(state["goal"], action, page, state["history"])
-                if self.pending_text and self.pending_text[0] == context:
-                    _, text, helper = self.pending_text
+                if decision.get("gear") == 2 and decision.get("text"):
+                    text = decision["text"]
+                    helper = {"model": decision["model"], "latency_ms": 0, "usage": {}}
                 else:
-                    text, helper = field_text(context)
-                    self.pending_text = (context, text, helper)
-                    state["text_calls"].append({**helper, "field": action["label"], "value": text})
+                    context = field_context(state["goal"], action, page, state["history"], self.profile)
+                    if self.pending_text and self.pending_text[0] == context:
+                        _, text, helper = self.pending_text
+                    else:
+                        text, helper = field_text(context)
+                        self.pending_text = (context, text, helper)
+                        state["text_calls"].append({**helper, "field": action["label"], "value": text})
+            if action["kind"] == "upload":
+                text, helper = self.pick_file(action, page)
+                state["text_calls"].append({**helper, "field": action["label"], "value": Path(text).name})
+            if self.approve and action["kind"] in {"click", "select", "coords"} and SENSITIVE.search(action["label"]):
+                if not self.approve(action):
+                    state["status"] = "blocked"
+                    state["denied"] = action["label"]
+                    return self.snapshot()
             # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
@@ -131,7 +191,8 @@ class Agent:
                     "text_helper": helper["model"] if helper else None,
                     "text_latency_ms": helper["latency_ms"] if helper else 0,
                     "operation": decision["operation"],
-                    "target": decision["target"],
+                    "target": decision.get("target"),
+                    "gear": decision.get("gear", 1),
                     "page_changed": None,
                     "url": page["url"],
                     "usage": decision["usage"],
@@ -159,6 +220,18 @@ class Agent:
         else:
             raise ValueError("Unknown command")
         return self.snapshot()
+
+    def pick_file(self, action, page):
+        """Upload targets come only from the user's own file list; the text helper may only name one of them."""
+        names = {Path(f).name: f for f in self.files}
+        if len(names) == 1:
+            return next(iter(names.values())), {"model": "single-file", "latency_ms": 0, "usage": {}}
+        context = field_context(self.state["goal"], action, page, self.state["history"], self.profile)
+        context["files"] = sorted(names)
+        name, helper = field_text(context)
+        if name not in names:
+            raise ValueError(f"Text helper picked a file that was not supplied: {name!r}; nothing uploaded.")
+        return names[name], helper
 
     def run(self):
         while self.state["status"] not in {"done", "blocked"}:

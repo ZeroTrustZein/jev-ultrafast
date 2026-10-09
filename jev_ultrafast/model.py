@@ -7,6 +7,7 @@ import time
 
 import httpx
 
+from . import local
 from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
@@ -25,6 +26,20 @@ def post_json(url, key, body):
             raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
         return response.json()
     raise RuntimeError("Model unavailable")
+
+
+def json_content(result):
+    """Parse chat-completion JSON, tolerating providers that wrap replies in Markdown or reasoning tokens."""
+    msg = result["choices"][0]["message"]
+    content = msg.get("content") or ""
+    if not content:
+        content = msg.get("reasoning_content") or "{}"
+    if "```" in content:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1:
+            content = content[start : end + 1]
+    return json.loads(content)
 
 
 def validate_choice(answer, ids):
@@ -48,7 +63,7 @@ def validate_choice(answer, ids):
 def action_space(actions):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
-    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT"}
+    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT", "upload": "UPLOAD"}
     for action in actions:
         kind = action["kind"]
         if kind not in operations:
@@ -84,6 +99,7 @@ def choose(state, goal, history):
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
         "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
         "SELECT": "Select an observed dropdown value.",
+        "UPLOAD": "Attach one of the user's files to a file input.",
     }
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
@@ -116,7 +132,15 @@ def choose(state, goal, history):
         "questions": questions,
     }
     started = time.perf_counter()
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    if os.environ.get("JEV_BACKEND") == "local":
+        result = local.systemone(body, post_json)
+    else:
+        base = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
+        result = post_json(base + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    if os.environ.get("JEV_LOG"):
+        # Teacher data for distillation: the exact systemone request and the full answer distributions.
+        with open(os.environ["JEV_LOG"], "a", encoding="utf-8") as log:
+            log.write(json.dumps({"request": body, "answers": result["answers"], "model": result.get("model")}) + "\n")
     operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None
@@ -148,9 +172,18 @@ def choose(state, goal, history):
     }
 
 
-def field_context(goal, action, page, history):
+class MissingValue(ValueError):
+    """The goal and profile do not contain a value for this field; ask the user instead of guessing."""
+
+    def __init__(self, field):
+        super().__init__(f"No value known for '{field}'; nothing typed.")
+        self.field = field
+
+
+def field_context(goal, action, page, history, profile=None):
     return {
         "goal": goal,
+        **({"profile": profile} if profile else {}),
         "field": {k: action.get(k) for k in ("label", "role", "value")},
         "page": {"title": page["title"], "text": page["text"][:6000]},
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
@@ -185,14 +218,107 @@ def field_text(context):
         },
     )
     try:
-        output = json.loads(result["choices"][0]["message"]["content"])
+        output = json_content(result)
         value = output["text"]
+        if value is None and set(output) == {"text"}:
+            raise MissingValue(context["field"]["label"])
         if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
             raise ValueError()
+    except MissingValue:
+        raise
     except (ValueError, KeyError, TypeError):
         raise ValueError("Text helper returned no valid field value; nothing typed.") from None
     return value, {
         "model": model,
         "latency_ms": round((time.perf_counter() - started) * 1000),
+        "usage": result.get("usage", {}),
+    }
+
+
+VISION_SYSTEM = """You are Gear 2 of a hybrid browser agent. The fast local policy is stuck, low-confidence, or blocked.
+Analyze the page screenshot and numbered element table to choose the next action.
+Return a JSON object:
+{
+  "operation": "CLICK"|"TYPE_TEXT"|"SELECT"|"UPLOAD"|"CLICK_COORDS"|"SCROLL_DOWN"|"WAIT"|"DONE"|"BLOCKED",
+  "target": "element index string like '3' for table elements",
+  "x": integer (required only if CLICK_COORDS for visual controls not in the element table),
+  "y": integer (required only if CLICK_COORDS),
+  "text": "text string if TYPE_TEXT",
+  "reason": "one sentence explaining the choice"
+}
+Prefer choosing target from the table. Use CLICK_COORDS only for visual controls (canvas, map, icon)."""
+
+
+def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
+    key = os.environ.get("TEXT_MODEL_API_KEY")
+    if not key:
+        raise ValueError("Gear 2 vision model requires TEXT_MODEL_API_KEY")
+    base = os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128").rstrip("/")
+    model = os.environ.get("TEXT_MODEL", "claude-odysseus")
+
+    elements, targets, controls = action_space(page["actions"])
+    elements_text = "\n".join(
+        f"[{e['index']}] {e.get('role', '')} \"{e['label']}\" value={e.get('value', '')!r} "
+        f"ops={','.join(e.get('operations', []))}"
+        for e in elements[:120]
+    )
+
+    user_text = f"""GOAL: {goal}
+TRIGGER: {reason}
+RECENT ACTIONS: {json.dumps([{k: h.get(k) for k in ('action', 'text', 'page_changed')} for h in history[-5:]])}
+PAGE URL: {page.get('url', '')}
+PAGE TITLE: {page.get('title', '')}
+ELEMENT TABLE:
+{elements_text}
+"""
+    started = time.perf_counter()
+    content = [
+        {"type": "text", "text": user_text},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{screenshot_b64}"}},
+    ]
+    result = post_json(
+        base + "/chat/completions",
+        key,
+        {
+            "model": model,
+            "max_tokens": 1024,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": VISION_SYSTEM},
+                {"role": "user", "content": content},
+            ],
+        },
+    )
+    data = json_content(result)
+    latency_ms = round((time.perf_counter() - started) * 1000)
+
+    op = str(data.get("operation", "WAIT")).upper()
+    target = str(data.get("target", ""))
+
+    choice = None
+    if op == "CLICK_COORDS":
+        choice = "CLICK_COORDS"
+    elif op in targets and target in targets[op]:
+        choice = targets[op][target]["id"]
+    elif op in controls:
+        choice = controls[op]["id"]
+    elif op in {"DONE", "BLOCKED", "WAIT"}:
+        choice = op
+    else:
+        choice = "wait" if "wait" in controls else op
+
+    return {
+        "choice": choice,
+        "operation": op,
+        "target": target,
+        "x": data.get("x"),
+        "y": data.get("y"),
+        "text": data.get("text"),
+        "reason": data.get("reason", ""),
+        "confidence": 1.0,
+        "probabilities": {choice: 1.0},
+        "latency_ms": latency_ms,
+        "gear": 2,
+        "model": f"vision:{model}",
         "usage": result.get("usage", {}),
     }

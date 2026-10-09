@@ -2,23 +2,98 @@
 
 import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
 
 # Atomically read visible content and controls, preserving actual DOM node identity.
-READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
+READ_STATE = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
+
+# Common paths across Windows, macOS, and Linux. Order: Brave first if requested, Chrome first otherwise.
+CANDIDATES = {
+    "brave": [
+        os.environ.get("BRAVE_PATH"),
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        shutil.which("brave-browser"),
+        shutil.which("brave"),
+    ],
+    "chrome": [
+        os.environ.get("CHROME_PATH"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        shutil.which("google-chrome"),
+        shutil.which("chrome"),
+        shutil.which("chromium"),
+    ],
+}
+
+
+def find_browser(preference=None):
+    pref = (preference or os.environ.get("BROWSER") or "").lower()
+    order = ("brave", "chrome") if pref == "brave" else ("chrome", "brave")
+    for key in order:
+        for path in CANDIDATES[key]:
+            if path and os.path.isfile(path):
+                return path, key
+    return None, None
+
+
+def ensure_browser(port=9333, preference=None):
+    """Start an isolated debug browser if the CDP port is not already answering."""
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1)
+        return
+    except Exception:
+        pass
+    exe, kind = find_browser(preference)
+    if not exe:
+        return
+    profile = Path.home() / f".jev-{kind}"
+    profile.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [
+            exe,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--window-size=1300,900",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(40):
+        time.sleep(0.15)
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1)
+            return
+        except Exception:
+            continue
+
 
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
 
 
 class Browser:
+    allow_upload = False
+
     def __init__(self, url):
+        ensure_browser()
         ensure_daemon()
         self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
         self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
@@ -77,7 +152,8 @@ class Browser:
         for attempt in range(10):
             try:
                 return browser_operation(
-                    {"operation": "observe", "session": self.session, "screenshot": screenshot}
+                    {"operation": "observe", "session": self.session, "screenshot": screenshot,
+                     "upload": self.allow_upload}
                 )
             except StalePage:
                 if attempt == 9:
@@ -137,6 +213,23 @@ def browser_operation(request):
         kind = action["kind"]
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
+        elif kind == "coords":
+            x, y = int(action["x"]), int(action["y"])
+            for event in ("mousePressed", "mouseReleased"):
+                call("Input.dispatchMouseEvent", type=event, x=x, y=y, button="left", clickCount=1)
+            return {"executed": "coords"}
+        elif kind == "upload":
+            if type(action["node"]) is not int:
+                raise ValueError("Invalid observed node")
+            node = call(
+                "Runtime.evaluate",
+                expression=f"(e => e?.isConnected && e.type==='file' && !e.disabled ? e : null)"
+                f"(window.__jevFast?.nodes.get({action['node']}))",
+            ).get("result", {})
+            if node.get("subtype") != "node":
+                raise StalePage("File input changed. Observe again.")
+            # The path comes from the user's own file list (Agent.files), never from model text.
+            call("DOM.setFileInputFiles", files=[request["text"]], objectId=node["objectId"])
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
@@ -146,9 +239,13 @@ def browser_operation(request):
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-              const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-              if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              const r=window.__jevFast.box(e), x=r.x+r.w/2, y=r.y+r.h/2;
+              if (!r.w || !r.h || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
+              // Hit-test inside the element's own shadow root or frame document, at its local coordinates.
+              const local=e.getBoundingClientRect(), root=e.getRootNode();
+              const hit=(root.elementFromPoint ? root : e.ownerDocument)
+                .elementFromPoint(local.x+local.width/2, local.y+local.height/2);
+              if (!e.contains(hit)) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
                     !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -188,6 +285,9 @@ def browser_operation(request):
     info = evaluate(READ_STATE)
     if info is None:
         raise StalePage("Document is navigating")
+    if not request.get("upload"):
+        # Without user files there is nothing to attach; never offer the operation.
+        info["actions"] = [a for a in info["actions"] if a["kind"] != "upload"]
     info["fingerprint"] = fingerprint(info)
     if request.get("screenshot", True):
         info["screenshot"] = call("Page.captureScreenshot", format="jpeg", quality=72)["data"]

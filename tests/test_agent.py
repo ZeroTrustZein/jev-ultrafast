@@ -318,3 +318,162 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def ollama_reply(content):
+    tokens = [{"token": ch, "logprob": -0.1 if ch.isalnum() else -5.0} for ch in content]
+    return {"message": {"content": content}, "logprobs": tokens, "prompt_eval_count": 9, "eval_count": 3}
+
+
+def test_local_backend_returns_typesafe_shape_through_choose(monkeypatch):
+    sent = []
+
+    def post(url, _key, body):
+        sent.append((url, body))
+        return ollama_reply('{"done": "nothing", "next": "click Go", "operation": "CLICK", "target": "2"}')
+
+    monkeypatch.setenv("JEV_BACKEND", "local")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(page(), "Find a book", [])
+    url, body = sent[0]
+    assert len(sent) == 1 and url.endswith("/api/chat")
+    branches = {b["properties"]["operation"]["const"]: b["properties"] for b in body["format"]["anyOf"]}
+    # A CLICK branch can only name click targets; TYPE_TEXT only editable ones; controls take no target.
+    assert branches["CLICK"]["target"]["enum"] == ["1", "2"] and branches["TYPE_TEXT"]["target"]["enum"] == ["1"]
+    assert "target" not in branches["WAIT"] and "target" not in branches["DONE"]
+    assert d["choice"] == "e3" and d["operation"] == "CLICK" and d["target"] == "2"
+    # Confidence ignores forced JSON syntax (-5.0 per char) and scores only the chosen values.
+    assert abs(d["confidence"] - 2.718281828 ** -0.6) < 1e-6
+
+
+def test_local_backend_rejects_target_outside_the_operation(monkeypatch):
+    monkeypatch.setenv("JEV_BACKEND", "local")
+    monkeypatch.setattr(
+        model, "post_json", lambda *_: ollama_reply('{"done": "", "next": "", "operation": "TYPE_TEXT", "target": "2"}')
+    )
+    with pytest.raises(ValueError, match="no action executed"):
+        model.choose(page(), "Find a book", [])
+
+
+def submit_page():
+    p = page()
+    p["actions"][2] = {"id": "e3", "kind": "click", "label": "Submit application", "role": "button", "value": "",
+                       "node": 20}
+    p["fingerprint"] = fingerprint(p)
+    return p
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_sensitive_click_needs_approval_before_input(runner, allowed):
+    runner.state["page"] = submit_page()
+    runner.state["decision"] = {**decision("e3"), "operation": "CLICK", "probabilities": {"e3": 1.0}}
+    runner.approve = Mock(return_value=allowed)
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.approve.call_args.args[0]["label"] == "Submit application"
+    assert runner.state["browser"].act.called is allowed
+    assert (runner.state["status"] == "blocked") is not allowed
+
+
+def test_missing_text_value_asks_instead_of_guessing(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", lambda *_: {"choices": [{"message": {"content": '{"text": null}'}}]})
+    context = model.field_context("Fill the form", page()["actions"][0], page(), [], {"name": "Ada"})
+    assert context["profile"] == {"name": "Ada"}
+    with pytest.raises(model.MissingValue) as missing:
+        model.field_text(context)
+    assert missing.value.field == "Search"
+
+
+def test_planner_never_verifies_a_blocked_run(monkeypatch):
+    from jev_ultrafast import planner
+
+    asked = []
+    monkeypatch.setattr(planner, "ask", lambda system, _content: asked.append(system) or {
+        "url": "https://example.test/", "goal": "Find a book", "profile": {}, "done": True, "missing": ""})
+    fake = Mock(state={"status": "blocked", "page": page()}, snapshot=Mock(return_value={"page": page()}))
+    fake.__enter__ = Mock(return_value=fake)
+    fake.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(planner, "Agent", Mock(return_value=fake))
+    result = planner.run("Find a book", report=lambda _: None)
+    assert result["done"] is False and asked == [planner.PLAN]
+
+
+def test_fenced_json_reply_is_accepted(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    reply = '```json\n{"text": "Lisbon"}\n```'
+    monkeypatch.setattr(model, "post_json", lambda *_: {"choices": [{"message": {"content": reply}}]})
+    assert model.field_text(model.field_context("Stay in Lisbon", page()["actions"][0], page(), []))[0] == "Lisbon"
+
+
+def test_action_space_includes_upload():
+    actions = [
+        {"id": "e1", "kind": "upload", "label": "Upload ID", "role": "upload", "value": "", "node": 15},
+        {"id": "e2", "kind": "click", "label": "Next", "role": "button", "value": "", "node": 25},
+    ]
+    elements, targets, controls = model.action_space(actions)
+    assert "UPLOAD" in targets
+    assert targets["UPLOAD"]["1"]["label"] == "Upload ID"
+    assert elements[0]["operations"] == ["UPLOAD"]
+
+
+def test_pdf_document_extraction(tmp_path):
+    from pypdf import PdfWriter
+
+    from jev_ultrafast.planner import documents
+
+    pdf_file = tmp_path / "test_doc.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    # create a simple PDF with text or extract check
+    with open(pdf_file, "wb") as f:
+        writer.write(f)
+
+    # Empty blank page triggers error as expected for scanned check
+    import pytest
+    with pytest.raises(ValueError, match="no text layer"):
+        documents([pdf_file])
+
+
+def test_browser_finder_discovers_chrome_or_brave():
+    from jev_ultrafast.browser import find_browser
+    exe, kind = find_browser()
+    assert exe is not None
+    assert kind in ("chrome", "brave")
+
+
+def test_gear2_triggers_on_low_confidence(runner, monkeypatch):
+    monkeypatch.setenv("GEAR2", "1")
+    monkeypatch.setenv("GEAR2_CONFIDENCE_THRESHOLD", "0.7")
+    monkeypatch.setattr(loop, "choose", lambda *_: {
+        "choice": "e1", "operation": "TYPE_TEXT", "target": "1", "confidence": 0.5,
+        "probabilities": {"e1": 1.0}, "latency_ms": 10, "usage": {}
+    })
+    runner.state["browser"].call.return_value = {"data": "fake_jpeg_b64"}
+    
+    vision_called = []
+    def mock_vision(page, goal, history, screenshot, reason):
+        vision_called.append((reason, screenshot))
+        return {
+            "choice": "e3", "operation": "CLICK", "target": "2", "confidence": 1.0,
+            "probabilities": {"e3": 1.0}, "latency_ms": 50, "gear": 2, "model": "mock_vlm", "usage": {}
+        }
+    monkeypatch.setattr(loop, "choose_vision", mock_vision)
+    runner.command("predict")
+    
+    assert len(vision_called) == 1
+    assert vision_called[0][0] == "low confidence"
+    assert runner.state["decision"]["gear"] == 2
+    assert runner.state["decision"]["choice"] == "e3"
+
+
+def test_gear2_click_coords_dispatches_mouse_event(runner):
+    runner.state["decision"] = {
+        "choice": "CLICK_COORDS", "operation": "CLICK_COORDS", "x": 150, "y": 250,
+        "confidence": 1.0, "probabilities": {"CLICK_COORDS": 1.0}, "latency_ms": 10,
+        "gear": 2, "usage": {}
+    }
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    act_arg = runner.state["browser"].act.call_args.args[0]
+    assert act_arg["kind"] == "coords"
+    assert act_arg["x"] == 150 and act_arg["y"] == 250
+    assert runner.state["history"][-1]["gear"] == 2

@@ -67,6 +67,26 @@ Chrome connects through [Browser Harness](https://github.com/browser-use/browser
 
 `TEXT_MODEL_API_KEY` is an OpenRouter key in the example configuration. The current demo uses `inception/mercury-2.5` with reasoning disabled. Gemini, GLM, and DeepSeek can also use the OpenAI-compatible text helper; configure the appropriate model, endpoint, and reasoning setting.
 
+## Jev Assist: Autonomous Document & Form Assistant
+
+A complete document-driven agent that ingests user files (PDFs, text, images), extracts structured facts, and executes complex multi-step browser workflows using local distilled Laya (running at ~75ms on GPU) or TypeSafe Jev.
+
+```bash
+# Fill any application using documents + attach files
+uv run jev-assist "Fill out the application using my details, attach my passport, and submit" \
+  --url "https://example.com/portal" \
+  --doc "path/to/profile.pdf" \
+  --file "path/to/passport_scan.pdf" \
+  --browser brave  # or --browser chrome (auto-detected if omitted)
+```
+
+- **Local GPU Decisions (~75 ms):** Uses our local fine-tuned `laya-browser-distilled` on port 8791 by default or when `--local` is passed.
+- **Native File Upload:** Uses CDP `DOM.setFileInputFiles` to handle real file inputs.
+- **Shadow DOM & Iframe Traversal:** Finds and interacts with controls inside modern web components and embedded iframes.
+- **PDF Extraction:** Reads text layers from raw `.pdf` documents directly.
+- **Safety Gate:** Requires explicit interactive human approval (`[y/N]`) before clicking any sensitive actions (`submit`, `pay`, `purchase`, `sign`, `delete`).
+- **Automatic Browser Detection:** Auto-launches Google Chrome or Brave Browser on port 9333 without manual flags.
+
 ## Use the library
 
 ```python

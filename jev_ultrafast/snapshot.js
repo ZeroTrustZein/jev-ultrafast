@@ -6,14 +6,37 @@
     const id=cache.ids.get(e); cache.nodes.set(id,e); return id;
   };
   for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);
-  const safe = e => !['password','file','hidden'].includes(e.type);
+  const safe = e => !['password','hidden'].includes(e.type);
+  // Same-origin iframes and open shadow roots are part of the page; cross-origin frames stay opaque.
+  const deepAll = selector => {
+    const out=[];
+    const visit=root=>{
+      out.push(...root.querySelectorAll(selector));
+      const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT); let el;
+      while ((el=walker.nextNode())) {
+        if (el.shadowRoot) visit(el.shadowRoot);
+        if (el.tagName==='IFRAME') { let d=null; try { d=el.contentDocument; } catch (_) {} if (d?.body) visit(d); }
+      }
+    };
+    visit(document);
+    return out;
+  };
+  // Viewport rectangle of an element, including the offsets of the iframes that contain it.
+  cache.box = e => {
+    const r=e.getBoundingClientRect(); let x=r.x, y=r.y, win=e.ownerDocument.defaultView;
+    while (win && win!==window && win.frameElement) {
+      const f=win.frameElement.getBoundingClientRect(); x+=f.x; y+=f.y; win=win.frameElement.ownerDocument.defaultView;
+    }
+    return {x,y,w:r.width,h:r.height};
+  };
+  const byId = (e,id) => (e.getRootNode().getElementById ? e.getRootNode() : e.ownerDocument).getElementById(id);
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
-      .map(id=>name(document.getElementById(id),seen)).filter(Boolean).join(' ');
+      .map(id=>name(byId(e,id),seen)).filter(Boolean).join(' ');
     return referenced || e.getAttribute('aria-label') ||
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
@@ -42,7 +65,7 @@
     return null;
   };
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
-    [...document.querySelectorAll('input,textarea,select')].filter(safe)
+    deepAll('input,textarea,select').filter(e=>safe(e) && e.type!=='file')
       .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
@@ -53,13 +76,21 @@
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
   const actions=[];
-  for (const e of document.querySelectorAll(selector)) {
-    if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
-    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
-    if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
+  for (const e of deepAll(selector)) {
+    if (!safe(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+    if (e.type==='file') {
+      // File inputs are often hidden behind a styled label; DOM.setFileInputFiles needs no click.
+      if (!visible(e) && ![...(e.labels||[])].some(visible) && !(e.parentElement && visible(e.parentElement))) continue;
+      actions.push({node:identity(e),role:'upload',label:name(e)||'File upload',kind:'upload',
+        value:[...e.files].map(f=>f.name).join(', ')});
+      continue;
+    }
+    if (!visible(e)) continue;
+    const r=cache.box(e), x=r.x+r.w/2, y=r.y+r.h/2, rname=role(e);
+    if (!rname || r.w<=0 || r.h<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
-      rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+      rect:{x:r.x,y:r.y,w:r.w,h:r.h}};
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
       if (value!==null) base[key]=value;

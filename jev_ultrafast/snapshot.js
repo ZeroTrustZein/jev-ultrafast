@@ -78,6 +78,7 @@
   const actions=[];
   for (const e of deepAll(selector)) {
     if (!safe(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+    if (e.tagName === 'A' && e.target === '_blank') e.target = '_self';
     if (e.type==='file') {
       // File inputs are often hidden behind a styled label; DOM.setFileInputFiles needs no click.
       if (!visible(e) && ![...(e.labels||[])].some(visible) && !(e.parentElement && visible(e.parentElement))) continue;

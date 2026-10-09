@@ -187,6 +187,12 @@ class Browser:
             cdp("Target.closeTarget", targetId=self.target)
             self.target = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
 
 def fingerprint(state):
     content = {k: state[k] for k in ("url", "text", "actions", "scroll")}

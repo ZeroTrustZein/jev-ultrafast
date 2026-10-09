@@ -146,7 +146,11 @@ class Agent:
                     "y": int(decision["y"]),
                 }
             else:
-                action = next(a for a in page["actions"] if a["id"] == selected)
+                action = next((a for a in page["actions"] if str(a["id"]).lower() == str(selected).lower()), None)
+                if not action:
+                    action = next((a for a in page["actions"] if a["id"] == "wait"), None)
+                    if not action:
+                        raise ValueError(f"Action '{selected}' not found on page")
             if len(state["history"]) >= MAX_STEPS:
                 state["status"] = "blocked"
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")

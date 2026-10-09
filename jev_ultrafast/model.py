@@ -10,7 +10,7 @@ import httpx
 from . import local
 from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
 
-CLIENT = httpx.Client(http2=True, timeout=25)
+CLIENT = httpx.Client(http2=True, timeout=120)
 
 
 def post_json(url, key, body):
@@ -302,10 +302,12 @@ ELEMENT TABLE:
         choice = targets[op][target]["id"]
     elif op in controls:
         choice = controls[op]["id"]
-    elif op in {"DONE", "BLOCKED", "WAIT"}:
+    elif op.lower() in [a["id"] for a in page.get("actions", [])]:
+        choice = op.lower()
+    elif op in {"DONE", "BLOCKED"}:
         choice = op
     else:
-        choice = "wait" if "wait" in controls else op
+        choice = "wait" if any(a["id"] == "wait" for a in page.get("actions", [])) else op
 
     return {
         "choice": choice,

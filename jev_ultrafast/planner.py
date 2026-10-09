@@ -136,10 +136,47 @@ def ensure_local_server(port=8791):
                     continue
 
 
+def interactive_shell():
+    print("\n" + "=" * 60)
+    print("🤖 Jev Hybrid Browser Assistant (Local Laya + Vision)")
+    print("=" * 60)
+    print("Type your task in plain English. Type 'exit' or 'q' to quit.\n")
+
+    while True:
+        try:
+            task = input("What would you like me to do?\n> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nGoodbye!")
+            break
+        if not task:
+            continue
+        if task.lower() in ("exit", "quit", "q"):
+            print("Goodbye!")
+            break
+
+        doc_in = input("Documents or PDFs for me to read? (optional, comma-separated, or Enter to skip):\n> ").strip()
+        docs = [d.strip().strip('"').strip("'") for d in doc_in.split(",") if d.strip()]
+
+        file_in = input("Files I should upload to forms? (optional, comma-separated, or Enter to skip):\n> ").strip()
+        files = [f.strip().strip('"').strip("'") for f in file_in.split(",") if f.strip()]
+
+        url_in = input("Starting website URL? (optional, or Enter to auto-detect):\n> ").strip()
+        url = url_in if url_in else None
+
+        print("\n🚀 Starting browser task...\n")
+        try:
+            result = run(task, docs, url=url, files=files)
+            status = "✅ DONE" if result.get("done") else f"⚠️ NOT DONE: {result.get('missing')}"
+            print(f"\n{status}\nFinal URL: {result['page']['url']}\n")
+        except Exception as e:
+            print(f"\n❌ Error during task: {e}\n")
+        print("-" * 60 + "\n")
+
+
 def main():
     load_environment()
     parser = argparse.ArgumentParser(description="Plan with a general LLM, act with local distilled Laya or Jev.")
-    parser.add_argument("request", help="High-level goal or task description.")
+    parser.add_argument("request", nargs="?", help="Task description. Omit for interactive chat mode.")
     parser.add_argument("--doc", action="append", default=[], help="Document or PDF for the planner to read.")
     parser.add_argument("--file", action="append", default=[], help="File the agent can upload to forms.")
     parser.add_argument("--url", help="Target URL (defaults to URL derived by planner).")
@@ -152,5 +189,8 @@ def main():
         os.environ["TYPESAFE_BASE_URL"] = "http://127.0.0.1:8791"
         os.environ["TYPESAFE_API_KEY"] = "local"
     ensure_local_server()
+    if not args.request:
+        interactive_shell()
+        return
     result = run(args.request, args.doc, url=args.url, files=args.file)
     print("DONE" if result.get("done") else f"NOT DONE: {result.get('missing')}", result["page"]["url"])

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Jev Assist · AI Browser Co-Pilot",
-  "version": "1.1.0",
-  "description": "Drives the tab you are on in your own Brave or Chrome. Local decisions, vision fallback, asks you before anything sensitive.",
+  "version": "1.2.0",
+  "description": "Drive Brave or Chrome with local distilled Laya (75ms) + Vision fallback. Interactive chat, document checklists, and live execution steps.",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",
@@ -10,10 +10,11 @@
   },
   "action": {
     "default_title": "Open Jev Assist",
-    "default_icon": "icon.png"
+    "default_icon": "icon.png",
+    "default_popup": "sidepanel.html"
   },
   "side_panel": {
-    "default_path": "popup.html"
+    "default_path": "sidepanel.html"
   },
   "background": {
     "service_worker": "background.js"

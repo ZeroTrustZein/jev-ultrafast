@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jev Assist · AI Browser Co-Pilot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="brand">
+      <span class="bolt">⚡</span>
+      <span class="brand-name">Jev Assist</span>
+      <span class="model-badge">Laya 75ms + Vision</span>
+    </div>
+    <div class="header-actions">
+      <button id="reset-btn" class="icon-btn" title="Start new conversation">🔄</button>
+      <div class="status-indicator" id="status-indicator" title="Backend Server Status">
+        <span class="dot" id="server-dot"></span>
+        <span id="server-text">Online</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Active Context Bar -->
+  <div class="context-bar">
+    <span class="context-icon">🌐</span>
+    <span class="context-url" id="context-url" title="Current tab">Detecting active tab...</span>
+    <label class="lock-tab-label" title="Lock agent strictly to this tab">
+      <input type="checkbox" id="lock-tab-cb"> Lock tab
+    </label>
+  </div>
+
+  <!-- Chat Messages Container -->
+  <main class="chat-container" id="chat-container">
+    <div class="welcome-card" id="welcome-card">
+      <div class="welcome-title">Describe a task, Jev will complete it.</div>
+      <div class="welcome-desc">Automates web portals, fills applications, uploads docs, and asks you for details when needed.</div>
+      <div class="chips-row">
+        <button class="chip" data-prompt="i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me stop and ask me if u need anything">🇩🇪 Renew Leipzig Permit</button>
+        <button class="chip" data-prompt="Fill out this application for a tourist visa. Ask me for any personal details you need.">🛂 Fill Visa Application</button>
+        <button class="chip" data-prompt="Find and open the Wikipedia article about Alan Turing.">📖 Wikipedia Search</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Bottom Composer -->
+  <footer class="composer-container">
+    <!-- Attachment chip list -->
+    <div class="attachments-list" id="attachments-list"></div>
+
+    <div class="composer-box">
+      <textarea id="composer-input" rows="1" placeholder="Describe a task, Jev AI will complete it..."></textarea>
+      <div class="composer-toolbar">
+        <div class="toolbar-left">
+          <label class="tool-btn" title="Attach Document or PDF">
+            📎
+            <input type="file" id="file-picker" multiple style="display:none;">
+          </label>
+          <span class="engine-tag">⚡ Agent (Hybrid 75ms)</span>
+        </div>
+        <div class="toolbar-right">
+          <button id="stop-btn" class="send-btn stop" style="display:none;" title="Stop agent">⏹</button>
+          <button id="send-btn" class="send-btn" title="Send message">↑</button>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

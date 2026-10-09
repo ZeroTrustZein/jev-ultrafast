@@ -96,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             with LOCK:
                 return self.send(200, json.dumps(response_state()))
-        if path == "/api/assist/state":
+        if path in ("/api/assist/state", "/api/chat/state"):
             return self.send(200, json.dumps(BRIDGE.get_state()))
         if path == "/demo.mp4":
             video = ROOT.parent / "docs" / "demo.mp4"
@@ -119,24 +119,27 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Host") != f"127.0.0.1:{PORT}":
             return self.send(403, json.dumps({"error": "Local demo requests only"}))
         path = urlparse(self.path).path
-        if path.startswith("/api/assist/"):
+        if path.startswith(("/api/assist/", "/api/chat/")):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length)) if length > 0 else {}
-                if path == "/api/assist/start":
-                    BRIDGE.start_task(
-                        body.get("request", ""),
-                        docs=body.get("docs", []),
-                        url=body.get("url"),
+                if path in ("/api/assist/start", "/api/chat/send"):
+                    msg = body.get("message") or body.get("request", "")
+                    BRIDGE.send_message(
+                        msg,
                         files=body.get("files", []),
+                        url=body.get("url"),
                     )
                     return self.send(200, json.dumps({"status": "started"}))
-                elif path == "/api/assist/respond":
-                    BRIDGE.respond(body.get("response", ""))
+                elif path in ("/api/assist/respond", "/api/chat/respond"):
+                    BRIDGE.respond_input(body.get("response", ""))
                     return self.send(200, json.dumps({"status": "responded"}))
-                elif path == "/api/assist/stop":
+                elif path in ("/api/assist/stop", "/api/chat/stop"):
                     BRIDGE.stop()
                     return self.send(200, json.dumps({"status": "stopped"}))
+                elif path == "/api/chat/reset":
+                    BRIDGE.reset()
+                    return self.send(200, json.dumps({"status": "reset"}))
             except Exception as exc:
                 return self.send(400, json.dumps({"error": str(exc)}))
         if (

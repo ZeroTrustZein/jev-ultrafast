@@ -6,6 +6,7 @@ let isPolling = false;
 const serverDot = document.getElementById("server-dot");
 const serverText = document.getElementById("server-text");
 const tabUrlEl = document.getElementById("tab-url");
+const lockTabCb = document.getElementById("lock-tab-cb");
 const taskInput = document.getElementById("task-input");
 const docsInput = document.getElementById("docs-input");
 const filesInput = document.getElementById("files-input");
@@ -36,11 +37,21 @@ if (typeof chrome !== "undefined" && chrome.tabs) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs[0] && tabs[0].url) {
       currentTabUrl = tabs[0].url;
-      tabUrlEl.textContent = currentTabUrl;
+      if (lockTabCb && lockTabCb.checked) {
+        tabUrlEl.textContent = currentTabUrl;
+      }
     }
   });
 } else {
-  tabUrlEl.textContent = "http://127.0.0.1:8766/application.html";
+  currentTabUrl = "http://127.0.0.1:8766/application.html";
+}
+
+if (lockTabCb) {
+  lockTabCb.addEventListener("change", () => {
+    tabUrlEl.textContent = lockTabCb.checked
+      ? (currentTabUrl || "Current active tab")
+      : "Auto-detected by AI from your goal ✨";
+  });
 }
 
 // Start Task
@@ -52,7 +63,7 @@ startBtn.addEventListener("click", async () => {
   }
   const docs = docsInput.value.split(",").map(d => d.trim()).filter(Boolean);
   const files = filesInput.value.split(",").map(f => f.trim()).filter(Boolean);
-  const url = currentTabUrl && !currentTabUrl.startsWith("chrome://") && !currentTabUrl.startsWith("brave://")
+  const url = (lockTabCb && lockTabCb.checked && currentTabUrl && !currentTabUrl.startsWith("chrome://") && !currentTabUrl.startsWith("brave://"))
     ? currentTabUrl
     : null;
 

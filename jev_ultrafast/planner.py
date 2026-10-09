@@ -21,13 +21,22 @@ from .model import MissingValue, json_content, post_json
 
 PLAN = """You prepare a task for a fast browser agent that can click, type, select, scroll, and attach the user's listed
 files to upload fields, but cannot read documents.
-From the user's request and documents, return JSON:
-{"url": start URL, "goal": one paragraph, "profile": {fact name: value}}
+From the user's request and context, dissect the intent and automatically determine the starting URL, the exact goal,
+and any profile facts.
+Return JSON:
+{"url": starting URL, "goal": one paragraph, "profile": {fact name: value}}
+- url: automatically determine the best starting URL for the task:
+  * If the user gave an explicit URL or the current open page matches the task, use it.
+  * If the task is about a specific city, service, portal, or website (e.g. Leipzig residence permit, Wikipedia,
+    airline flights, weather), determine the official portal URL (e.g. 'https://www.leipzig.de',
+    'https://en.wikipedia.org', 'https://www.google.com/travel/flights').
+  * If you are unsure of the exact deep link, provide an official search query like
+    'https://html.duckduckgo.com/html/?q=...' so the agent searches and navigates there directly.
+    Never leave url empty or invented.
 - goal: state every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
   Say to stop before any final submission or payment unless the user explicitly asked to submit or pay.
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
-  Copy values exactly. Never invent personal information; omit facts you do not have.
-- url: the official site for the task. Use a URL the user gave if any."""
+  Copy values exactly. Never invent personal information; omit facts you do not have."""
 
 VERIFY = """You check whether a browser agent finished its goal. Given the goal and the final page, return JSON:
 {"done": true/false, "missing": "what is still not satisfied, or empty"}. Judge only visible evidence."""
@@ -67,17 +76,21 @@ def documents(paths):
 
 
 def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, rounds=3):
-    note = f"\nStart at: {url}" if url else ""
+    context_lines = []
+    if url:
+        context_lines.append(f"Current open page in browser: {url}")
     if files:
-        note += f"\nFiles the agent can attach to upload fields: {[Path(f).name for f in files]}"
+        context_lines.append(f"Files the agent can attach to upload fields: {[Path(f).name for f in files]}")
+    note = ("\n" + "\n".join(context_lines)) if context_lines else ""
     plan = ask(PLAN, [{"type": "text", "text": request + note}, *documents(docs)])
     profile, goal = dict(plan.get("profile") or {}), plan["goal"]
-    report(f"PLAN {url or plan['url']}\n  goal: {goal}\n  profile: {sorted(profile)}")
+    start_url = plan.get("url") or url or "https://html.duckduckgo.com/html/"
+    report(f"PLAN {start_url}\n  goal: {goal}\n  profile: {sorted(profile)}")
 
     def approve(action):
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
 
-    with Agent(url or plan["url"], goal, profile=profile, approve=approve, files=files) as agent:
+    with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
         for _ in range(rounds):
             while agent.state["status"] not in {"done", "blocked"}:
                 try:

@@ -19,10 +19,15 @@
   </div>
 
   <div class="container">
-    <!-- Active Tab Banner -->
+    <!-- Target Website Banner -->
     <div class="tab-card">
-      <div class="tab-label">Target Page:</div>
-      <div class="tab-url" id="tab-url" title="Current browser tab">Detecting active tab...</div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="tab-label">Target Website:</div>
+        <label style="font-size:10px; color:var(--text-muted); display:flex; align-items:center; gap:4px; cursor:pointer;">
+          <input type="checkbox" id="lock-tab-cb" style="margin:0;"> Lock to current tab
+        </label>
+      </div>
+      <div class="tab-url" id="tab-url" title="Target website">Auto-detected by AI from your goal ✨</div>
     </div>
 
     <!-- Task Input Form -->

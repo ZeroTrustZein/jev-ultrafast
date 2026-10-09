@@ -99,7 +99,13 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         last = state["history"][-1] if state["history"] else {}
                         report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
                 except MissingValue as missing:
-                    profile[missing.field] = ask_user(f"What should go in '{missing.field}'? ")
+                    prompt = f"The form needs your {missing.field}. What should I enter?"
+                    report(f"❓ {prompt}")
+                    val = ask_user(prompt)
+                    profile[missing.field] = val
+                    if agent.profile is not None:
+                        agent.profile[missing.field] = val
+                    agent.state["goal"] += f"\nUser provided {missing.field}: {val}"
             if agent.state.get("denied"):
                 return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
             if agent.state["status"] == "blocked":

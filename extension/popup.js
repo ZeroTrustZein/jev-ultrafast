@@ -116,12 +116,23 @@ stopBtn.addEventListener("click", async () => {
 // Respond to Interactive Prompts
 async function sendResponse(answer) {
   try {
+    promptCard.style.display = "none";
+    // Show immediate chat feedback in the stream list
+    const chatBubble = document.createElement("div");
+    chatBubble.className = "stream-item";
+    chatBubble.style.cssText = "border-left: 3px solid #3b82f6; background: rgba(59, 130, 246, 0.15);";
+    chatBubble.innerHTML = `
+      <span class="stream-time">💬</span>
+      <span class="stream-msg" style="color: #93c5fd; font-weight: 600;">You: ${escapeHtml(answer)}</span>
+    `;
+    streamList.appendChild(chatBubble);
+    streamList.scrollTop = streamList.scrollHeight;
+
     await fetch(`${BASE}/api/assist/respond`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ response: answer })
     });
-    promptCard.style.display = "none";
     userAnswerInput.value = "";
   } catch (err) {
     alert("Error sending answer to agent: " + err);

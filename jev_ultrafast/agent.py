@@ -167,7 +167,13 @@ class Agent:
             if action["kind"] == "fill":
                 if not state["browser"].fresh(page):
                     raise StalePage("Page changed before text generation. Choose again.")
-                if decision.get("gear") == 2 and decision.get("text"):
+                from .model import PERSONAL_FIELD
+
+                if (
+                    decision.get("gear") == 2
+                    and decision.get("text")
+                    and not PERSONAL_FIELD.search(action.get("label", ""))
+                ):
                     text = decision["text"]
                     helper = {"model": decision["model"], "latency_ms": 0, "usage": {}}
                 else:

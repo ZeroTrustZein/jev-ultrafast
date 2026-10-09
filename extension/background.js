@@ -83,6 +83,13 @@ setInterval(async () => {
   } catch (_) {}
 }, 2000);
 
+// Clicking the extension toolbar icon opens the persistent side panel instead of a temporary popup.
+chrome.action.onClicked.addListener(async (tab) => {
+  if (chrome.sidePanel && chrome.sidePanel.open) {
+    await chrome.sidePanel.open({ windowId: tab.windowId });
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {

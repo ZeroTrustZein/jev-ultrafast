@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import re
 import time
 
 import httpx
@@ -173,6 +174,15 @@ def choose(state, goal, history):
     }
 
 
+PERSONAL_FIELD = re.compile(
+    r"\b(name|vorname|nachname|surname|family name|first name|last name|geburt|birth|passport|passnummer|"
+    r"id number|identifikation|postleitzahl|plz|postal|zip|phone|telefon|mobile|handy|email|e-mail|"
+    r"adresse|street|straße|strasse|nationality|staatsangehörigkeit)\b",
+    re.I,
+)
+PLACEHOLDERS = {"n/a", "none", "unknown", "null", "john doe", "jane doe", "test", "example", "placeholder"}
+
+
 class MissingValue(ValueError):
     """The goal and profile do not contain a value for this field; ask the user instead of guessing."""
 
@@ -220,10 +230,12 @@ def field_text(context):
     )
     try:
         output = json_content(result)
-        value = output["text"]
-        if value is None and set(output) == {"text"}:
+        value = output.get("text")
+        if value is None or (isinstance(value, str) and not value.strip()):
             raise MissingValue(context["field"]["label"])
-        if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
+        if isinstance(value, str) and value.lower().strip() in PLACEHOLDERS:
+            raise MissingValue(context["field"]["label"])
+        if set(output) != {"text"} or not isinstance(value, str) or len(value) > 2000:
             raise ValueError()
     except MissingValue:
         raise

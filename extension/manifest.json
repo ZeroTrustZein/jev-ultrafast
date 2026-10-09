@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Jev Assist · AI Browser Co-Pilot",
+  "version": "1.0.0",
+  "description": "Drive Brave or Chrome with local distilled Laya (75ms) + Vision fallback. Interactive prompts, file uploads, and approval safety.",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8766/*"
+  ]
+}

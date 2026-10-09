@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .agent import Agent
+from .bridge import BRIDGE
 from .questions import MAX_STEPS
 
 ROOT = Path(__file__).parent
@@ -75,8 +76,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token")
         self.end_headers()
         self.wfile.write(content)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token")
+        self.end_headers()
 
     def do_GET(self):
         if self.headers.get("Host") != f"127.0.0.1:{PORT}":
@@ -85,6 +96,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             with LOCK:
                 return self.send(200, json.dumps(response_state()))
+        if path == "/api/assist/state":
+            return self.send(200, json.dumps(BRIDGE.get_state()))
         if path == "/demo.mp4":
             video = ROOT.parent / "docs" / "demo.mp4"
             if video.exists():
@@ -103,9 +116,31 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, content, mime + "; charset=utf-8")
 
     def do_POST(self):
+        if self.headers.get("Host") != f"127.0.0.1:{PORT}":
+            return self.send(403, json.dumps({"error": "Local demo requests only"}))
+        path = urlparse(self.path).path
+        if path.startswith("/api/assist/"):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length)) if length > 0 else {}
+                if path == "/api/assist/start":
+                    BRIDGE.start_task(
+                        body.get("request", ""),
+                        docs=body.get("docs", []),
+                        url=body.get("url"),
+                        files=body.get("files", []),
+                    )
+                    return self.send(200, json.dumps({"status": "started"}))
+                elif path == "/api/assist/respond":
+                    BRIDGE.respond(body.get("response", ""))
+                    return self.send(200, json.dumps({"status": "responded"}))
+                elif path == "/api/assist/stop":
+                    BRIDGE.stop()
+                    return self.send(200, json.dumps({"status": "stopped"}))
+            except Exception as exc:
+                return self.send(400, json.dumps({"error": str(exc)}))
         if (
-            self.headers.get("Host") != f"127.0.0.1:{PORT}"
-            or self.headers.get("X-Demo-Token") != TOKEN
+            self.headers.get("X-Demo-Token") != TOKEN
             or self.headers.get("Origin") not in (None, ORIGIN)
         ):
             return self.send(403, json.dumps({"error": "Local demo requests only"}))

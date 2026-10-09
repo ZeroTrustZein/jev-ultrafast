@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jev Assist</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span class="logo-bolt">⚡</span>
+      <span class="title">Jev Assist</span>
+      <span class="badge">Hybrid 75ms</span>
+    </div>
+    <div class="server-status" id="server-status" title="Local Agent Server Status">
+      <span class="dot" id="server-dot"></span>
+      <span id="server-text">Offline</span>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Active Tab Banner -->
+    <div class="tab-card">
+      <div class="tab-label">Target Page:</div>
+      <div class="tab-url" id="tab-url" title="Current browser tab">Detecting active tab...</div>
+    </div>
+
+    <!-- Task Input Form -->
+    <div class="form-group" id="input-section">
+      <label for="task-input">What should I do?</label>
+      <textarea id="task-input" rows="3" placeholder="e.g. Fill the visa application form, upload my passport scan, and confirm all fields."></textarea>
+
+      <div class="options-toggle" id="options-toggle">▶ Advanced (Documents & Uploads)</div>
+      <div class="options-panel" id="options-panel">
+        <label for="docs-input">Reference Documents (PDF / Text path):</label>
+        <input type="text" id="docs-input" placeholder="C:\Users\Zein\Documents\profile.pdf">
+
+        <label for="files-input">Files to attach/upload to form:</label>
+        <input type="text" id="files-input" placeholder="C:\Users\Zein\Downloads\passport_scan.pdf">
+      </div>
+
+      <div class="actions">
+        <button id="start-btn" class="btn primary">Start Task 🚀</button>
+        <button id="stop-btn" class="btn danger" style="display:none;">Stop</button>
+      </div>
+    </div>
+
+    <!-- Interactive User Prompt Card (for Missing Data) -->
+    <div class="prompt-card" id="user-prompt-card" style="display:none;">
+      <div class="prompt-header">⚠️ Agent Needs Your Input</div>
+      <div class="prompt-text" id="prompt-question"></div>
+      <div class="prompt-input-row" id="text-input-row">
+        <input type="text" id="user-answer-input" placeholder="Your answer...">
+        <button id="send-answer-btn" class="btn primary small">Send</button>
+      </div>
+      <div class="prompt-approval-row" id="approval-input-row" style="display:none;">
+        <button id="approve-btn" class="btn success small">Allow (Yes)</button>
+        <button id="deny-btn" class="btn danger small">Deny (No)</button>
+      </div>
+    </div>
+
+    <!-- Live Execution Stream -->
+    <div class="stream-section">
+      <div class="stream-header">
+        <span>Execution Steps</span>
+        <span id="status-pill" class="pill idle">Idle</span>
+      </div>
+      <div class="stream-list" id="stream-list">
+        <div class="empty-state">No active task. Enter a goal above and click Start.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

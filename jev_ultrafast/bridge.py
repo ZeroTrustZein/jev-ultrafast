@@ -18,6 +18,13 @@ class AssistBridge:
         self.active_agent = None
 
     def start_task(self, request, docs=(), url=None, files=()):
+        import os
+
+        from . import relay
+
+        # Tasks started from the extension drive the user's own tab, not a separate debug browser.
+        relay.wait_connected(timeout=5)
+        os.environ["JEV_DRIVER"] = "extension"
         with self.lock:
             if self.status in ("running", "waiting_user"):
                 raise RuntimeError("A task is already running")

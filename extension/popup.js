@@ -33,8 +33,10 @@ optionsToggle.addEventListener("click", () => {
 });
 
 // Detect current browser tab
+let currentTabId = null;
 if (typeof chrome !== "undefined" && chrome.tabs) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs && tabs[0]) currentTabId = tabs[0].id;
     if (tabs && tabs[0] && tabs[0].url) {
       currentTabUrl = tabs[0].url;
       if (lockTabCb && lockTabCb.checked) {
@@ -67,8 +69,19 @@ startBtn.addEventListener("click", async () => {
     ? currentTabUrl
     : null;
 
+  if (currentTabUrl.startsWith("brave://") || currentTabUrl.startsWith("chrome://")) {
+    alert("Browser pages (brave://, chrome://) can't be automated. Open any normal website tab first.");
+    return;
+  }
+
   try {
     startBtn.disabled = true;
+    startBtn.textContent = "Attaching to this tab...";
+    // The background worker attaches the debugger to this tab and connects it to the local agent.
+    const attached = await chrome.runtime.sendMessage({ type: "attach", tabId: currentTabId });
+    if (!attached || !attached.ok) {
+      throw new Error((attached && attached.error) || "Could not attach to this tab");
+    }
     startBtn.textContent = "Launching...";
     const res = await fetch(`${BASE}/api/assist/start`, {
       method: "POST",
@@ -85,7 +98,8 @@ startBtn.addEventListener("click", async () => {
       startBtn.textContent = "Start Task 🚀";
     }
   } catch (err) {
-    alert("Cannot connect to local agent on 127.0.0.1:8766. Is the server running?");
+    alert("Could not start: " + (err && err.message ? err.message : "local agent on 127.0.0.1:8766 is not running"));
+    chrome.runtime.sendMessage({ type: "release" });
     startBtn.disabled = false;
     startBtn.textContent = "Start Task 🚀";
   }
@@ -96,6 +110,7 @@ stopBtn.addEventListener("click", async () => {
   try {
     await fetch(`${BASE}/api/assist/stop`, { method: "POST" });
   } catch (err) {}
+  chrome.runtime.sendMessage({ type: "release" });
 });
 
 // Respond to Interactive Prompts

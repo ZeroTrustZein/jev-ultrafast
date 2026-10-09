@@ -167,8 +167,11 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     load_environment()
     atexit.register(close_browser)
+    from . import relay
+
+    relay.start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Jev Ultrafast: {ORIGIN}", flush=True)
+    print(f"Jev Ultrafast: {ORIGIN}  (extension relay ws://127.0.0.1:{relay.PORT})", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

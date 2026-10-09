@@ -93,18 +93,33 @@ class Browser:
     allow_upload = False
 
     def __init__(self, url):
-        ensure_browser()
-        ensure_daemon()
-        self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
-        self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
-        self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
-        # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
-        self.call("Emulation.setFocusEmulationEnabled", enabled=True)
-        self.call("Page.navigate", url=url)
+        global cdp
+        if os.environ.get("JEV_DRIVER") == "extension":
+            # The user's own tab in their real browser, driven through the Jev Assist extension's debugger session.
+            from . import relay
+
+            cdp = relay.cdp
+            # target stays None so close() never closes the user's own tab.
+            self.target, self.session = None, "extension"
+            if url and url != self.evaluate("location.href"):
+                self.call("Page.navigate", url=url)
+                time.sleep(0.3)  # let the old document unload before polling readyState
+        else:
+            ensure_browser()
+            ensure_daemon()
+            self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+            self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
+            self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
+            # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
+            self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+            self.call("Page.navigate", url=url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if self.evaluate("document.readyState") == "complete":
-                break
+            try:
+                if self.evaluate("document.readyState") == "complete":
+                    break
+            except StalePage:
+                pass  # mid-navigation: the old document is gone, the new one is not ready yet
             time.sleep(0.02)
 
     def call(self, method, **params):

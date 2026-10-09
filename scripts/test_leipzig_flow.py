@@ -1,12 +1,10 @@
 """Live verification script for student residence permit renewal on leipzig.de."""
 
-import os
 import sys
 
-# Ensure immediate unbuffered console output
-sys.stdout.reconfigure(line_buffering=True)
-
 from jev_ultrafast.planner import run
+
+sys.stdout.reconfigure(line_buffering=True)
 
 user_interactions = []
 

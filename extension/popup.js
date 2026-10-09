@@ -169,13 +169,27 @@ async function pollState() {
 
     // Render Stream logs
     if (state.history && state.history.length > 0) {
-      streamList.innerHTML = state.history.map(item => `
+      let items = state.history.map(item => `
         <div class="stream-item">
           <span class="stream-time">${item.time}</span>
           <span class="stream-msg">${escapeHtml(item.msg)}</span>
         </div>
       `).join("");
+      if (state.error) {
+        items += `
+          <div class="stream-item" style="border-left: 3px solid var(--danger); background: rgba(239, 68, 68, 0.15);">
+            <span class="stream-time">⚠️</span>
+            <span class="stream-msg" style="color: #fca5a5;">${escapeHtml(state.error)}</span>
+          </div>`;
+      }
+      streamList.innerHTML = items;
       streamList.scrollTop = streamList.scrollHeight;
+    } else if (state.error) {
+      streamList.innerHTML = `
+        <div class="stream-item" style="border-left: 3px solid var(--danger); background: rgba(239, 68, 68, 0.15);">
+          <span class="stream-time">⚠️</span>
+          <span class="stream-msg" style="color: #fca5a5;">${escapeHtml(state.error)}</span>
+        </div>`;
     } else if (state.status === "idle") {
       streamList.innerHTML = `<div class="empty-state">No active task. Enter a goal above and click Start.</div>`;
     }

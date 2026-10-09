@@ -76,6 +76,7 @@ def documents(paths):
 
 
 def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, rounds=3):
+    ensure_local_server()
     context_lines = []
     if url:
         context_lines.append(f"Current open page in browser: {url}")
@@ -117,10 +118,11 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
 def ensure_local_server(port=8791):
     """Ensure the local distilled Laya server is serving if running in local mode."""
     base = os.environ.get("TYPESAFE_BASE_URL", "").rstrip("/")
-    if not base and not os.environ.get("TYPESAFE_API_KEY"):
-        os.environ["TYPESAFE_BASE_URL"] = f"http://127.0.0.1:{port}"
-        os.environ["TYPESAFE_API_KEY"] = "local"
+    # Default to local 75ms distilled server unless user explicitly specified a remote URL
+    if not base or f":{port}" in base:
         base = f"http://127.0.0.1:{port}"
+        os.environ["TYPESAFE_BASE_URL"] = base
+        os.environ.setdefault("TYPESAFE_API_KEY", "local")
     if f":{port}" in base:
         try:
             urllib.request.urlopen(f"{base}/v1/systemone", timeout=1)

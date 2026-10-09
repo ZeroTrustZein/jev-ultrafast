@@ -56,7 +56,8 @@ def validate_choice(answer, ids):
     except (KeyError, TypeError, ValueError):
         valid = False
     if not valid:
-        raise ValueError("Invalid TypeSafe response; no action executed.")
+        choice = answer.get("choice") if isinstance(answer, dict) else None
+        raise ValueError(f"Invalid TypeSafe response (choice={choice!r}); no action executed.")
     return answer
 
 

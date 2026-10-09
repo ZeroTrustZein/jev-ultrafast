@@ -86,10 +86,19 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
-            state["decision"] = choose(state["page"], state["goal"], state["history"])
+            gear2_on = os.environ.get("GEAR2", "1") == "1"
+            try:
+                state["decision"] = choose(state["page"], state["goal"], state["history"])
+            except Exception as exc:
+                if gear2_on:
+                    screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
+                    state["decision"] = choose_vision(
+                        state["page"], state["goal"], state["history"], screenshot, reason=f"gear 1 error: {exc}"
+                    )
+                else:
+                    raise
 
             # 2-Gear Hybrid Switch: Wake up Gear 2 (Multimodal VLM) if Gear 1 is low-confidence, blocked, or looping
-            gear2_on = os.environ.get("GEAR2", "1") == "1"
             low_conf = state["decision"].get("confidence", 1.0) < float(
                 os.environ.get("GEAR2_CONFIDENCE_THRESHOLD", "0.65")
             )
@@ -98,7 +107,7 @@ class Agent:
                 len(state["history"]) >= 2
                 and all(h.get("page_changed") is False and h.get("kind") != "wait" for h in state["history"][-2:])
             )
-            if gear2_on and (low_conf or is_blocked or is_looping):
+            if gear2_on and state["decision"].get("gear") != 2 and (low_conf or is_blocked or is_looping):
                 trigger_reason = (
                     "looping with no change"
                     if is_looping
@@ -111,7 +120,7 @@ class Agent:
                     )
                 except Exception:
                     state["decision"]["gear"] = 1
-            else:
+            elif "gear" not in state["decision"]:
                 state["decision"]["gear"] = 1
 
             state["decisions"].append(

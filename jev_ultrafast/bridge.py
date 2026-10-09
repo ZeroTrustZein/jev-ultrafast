@@ -50,8 +50,9 @@ class AssistBridge:
 
         def worker():
             try:
-                from .planner import run
+                from .planner import ensure_local_server, run
 
+                ensure_local_server()
                 res = run(request, docs, url=url, files=files, ask_user=ask_user_callback, report=report_callback)
                 with self.lock:
                     self.status = "done"
@@ -61,10 +62,12 @@ class AssistBridge:
                         "url": res.get("page", {}).get("url", ""),
                         "steps": len(res.get("history", [])),
                     }
+                    report_callback(f"🎉 Complete! Final URL: {res.get('page', {}).get('url', '')}")
             except Exception as exc:
                 with self.lock:
                     self.status = "error"
                     self.error = str(exc)
+                report_callback(f"❌ Error: {exc}")
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()

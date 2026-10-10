@@ -162,13 +162,23 @@ async function pollChat() {
   }
 }
 
+let lastRendered = "";
 function renderMessages(messages) {
+  // Redraw only when the conversation actually changed, and only follow new output if the user is already at the
+  // bottom; otherwise scrolling up to read gets yanked back down every poll.
+  const snapshot = JSON.stringify(messages);
+  if (snapshot === lastRendered) return;
+  lastRendered = snapshot;
+  const atBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 40;
+  const openDrawers = new Set(
+    [...chatContainer.querySelectorAll("details.steps-drawer")].map((d, i) => (d.open ? i : -1)).filter((i) => i >= 0)
+  );
   chatContainer.innerHTML = messages.map((m) => {
     const isUser = m.role === "user";
     let stepsHtml = "";
     if (m.steps && m.steps.length > 0) {
       stepsHtml = `
-        <details class="steps-drawer" open>
+        <details class="steps-drawer">
           <summary>Execution Steps (${m.steps.length})</summary>
           <div class="steps-list">
             ${m.steps.map(s => `
@@ -186,8 +196,8 @@ function renderMessages(messages) {
     if (m.is_approval) {
       approvalHtml = `
         <div class="approval-card">
-          <button class="btn-small allow" onclick="respondInput('yes')">Allow (Yes)</button>
-          <button class="btn-small deny" onclick="respondInput('no')">Deny (No)</button>
+          <button class="btn-small allow" data-answer="yes">Allow (Yes)</button>
+          <button class="btn-small deny" data-answer="no">Deny (No)</button>
         </div>
       `;
     }
@@ -204,10 +214,20 @@ function renderMessages(messages) {
     `;
   }).join("");
 
-  chatContainer.scrollTop = chatContainer.scrollHeight;
+  // Keep drawers the user expanded open; new drawers start collapsed.
+  chatContainer.querySelectorAll("details.steps-drawer").forEach((d, i) => {
+    if (openDrawers.has(i)) d.open = true;
+  });
+  if (atBottom) chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
 // User response handler for approvals or prompt inputs
+// One delegated listener: Manifest V3 blocks inline onclick handlers, and the buttons are re-created on redraw.
+chatContainer.addEventListener("click", (e) => {
+  const button = e.target.closest("button[data-answer]");
+  if (button) respondInput(button.dataset.answer);
+});
+
 window.respondInput = async function(text) {
   try {
     await fetch(`${BASE}/api/chat/respond`, {

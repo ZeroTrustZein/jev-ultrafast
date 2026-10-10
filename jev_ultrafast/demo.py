@@ -78,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token, X-File-Name")
         self.end_headers()
         self.wfile.write(content)
 
@@ -86,7 +86,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Demo-Token, X-File-Name")
         self.end_headers()
 
     def do_GET(self):
@@ -119,6 +119,20 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Host") != f"127.0.0.1:{PORT}":
             return self.send(403, json.dumps({"error": "Local demo requests only"}))
         path = urlparse(self.path).path
+        if path == "/api/chat/upload":
+            # Raw file bytes from the side panel's file picker; only the extension may store files on disk.
+            if not (self.headers.get("Origin") or "").startswith("chrome-extension://"):
+                return self.send(403, json.dumps({"error": "Uploads are accepted from the extension only"}))
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 25 * 1024 * 1024:
+                    raise ValueError("Attachments must be between 1 byte and 25 MB")
+                from urllib.parse import unquote
+
+                name = BRIDGE.add_file(unquote(self.headers.get("X-File-Name", "attachment")), self.rfile.read(length))
+                return self.send(200, json.dumps({"status": "stored", "name": name}))
+            except Exception as exc:
+                return self.send(400, json.dumps({"error": str(exc)}))
         if path.startswith(("/api/assist/", "/api/chat/")):
             try:
                 length = int(self.headers.get("Content-Length", "0"))

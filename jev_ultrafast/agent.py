@@ -231,11 +231,11 @@ class Agent:
                     base64.b64decode(state["page"]["screenshot"])
                 )
             repeated = state["history"][-3:]
-            state["status"] = (
-                "blocked"
-                if len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated)
-                else "ready"
-            )
+            stuck = len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated)
+            # A few WAITs cover slow loads; a long run of them on an unchanged page means there is no next step.
+            waits = state["history"][-8:]
+            idle = len(waits) == 8 and all(h["kind"] == "wait" and h["page_changed"] is False for h in waits)
+            state["status"] = "blocked" if stuck or idle else "ready"
         else:
             raise ValueError("Unknown command")
         return self.snapshot()

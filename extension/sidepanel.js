@@ -52,13 +52,28 @@ document.querySelectorAll(".chip").forEach((chip) => {
 });
 
 // 4. File attachments
-filePicker.addEventListener("change", (e) => {
+// The browser never exposes a picked file's disk path, so send the bytes to the local agent, which stores them.
+filePicker.addEventListener("change", async (e) => {
   for (const f of e.target.files) {
-    if (!attachedFiles.includes(f.name)) {
-      attachedFiles.push(f.name);
+    if (attachedFiles.includes(f.name)) continue;
+    attachedFiles.push(f.name + " (uploading…)");
+    renderAttachments();
+    try {
+      const res = await fetch(`${BASE}/api/chat/upload`, {
+        method: "POST",
+        headers: { "X-File-Name": encodeURIComponent(f.name) },
+        body: f,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      attachedFiles[attachedFiles.indexOf(f.name + " (uploading…)")] = f.name;
+    } catch (err) {
+      attachedFiles.splice(attachedFiles.indexOf(f.name + " (uploading…)"), 1);
+      alert(`Could not attach ${f.name}: ${err.message || err}`);
     }
+    renderAttachments();
   }
-  renderAttachments();
+  filePicker.value = "";
 });
 
 function renderAttachments() {
@@ -81,28 +96,41 @@ async function sendMessage() {
   const text = composerInput.value.trim();
   if (!text) return;
 
+  // The side panel outlives tab switches: always drive the tab the user is looking at right now.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.url || /^(brave|chrome|edge|about):/.test(tab.url) || tab.url.includes("chromewebstore")) {
+    alert("Open a normal website tab first. Browser pages (brave://, chrome://, the store) can't be automated.");
+    return;
+  }
+  currentTabId = tab.id;
+  currentTabUrl = tab.url;
+  contextUrlEl.textContent = currentTabUrl;
+
   composerInput.value = "";
   composerInput.style.height = "auto";
   sendBtn.classList.remove("active");
   if (welcomeCard) welcomeCard.style.display = "none";
 
-  // If driving this tab, attach debugger if not already attached
-  if (typeof chrome !== "undefined" && chrome.runtime) {
-    try {
-      chrome.runtime.sendMessage({ type: "attach", tabId: currentTabId });
-    } catch (_) {}
+  // Attach to this tab before the agent starts; a failure here must be visible, not swallowed.
+  const attached = await chrome.runtime.sendMessage({ type: "attach", tabId: currentTabId });
+  if (!attached || !attached.ok) {
+    alert("Could not take control of this tab: " + ((attached && attached.error) || "unknown error"));
+    return;
   }
 
-  const url = (lockTabCb && lockTabCb.checked && currentTabUrl && !currentTabUrl.startsWith("brave://") && !currentTabUrl.startsWith("chrome://"))
-    ? currentTabUrl
-    : null;
+  const url = lockTabCb && lockTabCb.checked ? currentTabUrl : null;
+  const files = attachedFiles.filter((name) => !name.endsWith("(uploading…)"));
 
   try {
-    await fetch(`${BASE}/api/chat/send`, {
+    const res = await fetch(`${BASE}/api/chat/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, files: attachedFiles, url })
+      body: JSON.stringify({ message: text, files, url })
     });
+    const data = await res.json();
+    if (!res.ok) alert(data.error || "Jev could not start this task");
+    attachedFiles = [];
+    renderAttachments();
   } catch (err) {
     alert("Could not connect to Jev local server on 127.0.0.1:8766. Is the server running?");
   }

@@ -1,5 +1,6 @@
 """Conversational session manager and extension bridge for Jev Assist."""
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -8,10 +9,14 @@ from .agent import Agent
 from .chat_agent import chat_turn
 from .model import MissingValue
 
+# Side-panel attachments land here (artifacts/ is git-ignored), so the agent can read and upload them.
+UPLOADS = Path.cwd() / "artifacts" / "uploads"
+
 
 class AssistBridge:
     def __init__(self):
-        self.lock = threading.Lock()
+        # Re-entrant: reset() holds the lock while calling stop(), which takes it again.
+        self.lock = threading.RLock()
         self.status = "idle"  # "idle" | "thinking" | "running" | "waiting_user" | "error"
         self.messages = []
         self.profile = {}
@@ -23,15 +28,32 @@ class AssistBridge:
         self.worker_thread = None
         self.msg_counter = 1
 
+    def add_file(self, name, data):
+        """Store a file the user attached in the side panel; the agent may read it or upload it to forms."""
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        safe = Path(name).name or "attachment"
+        path = UPLOADS / f"{int(time.time() * 1000)}-{safe}"
+        path.write_bytes(data)
+        with self.lock:
+            self.files.append(str(path))
+        return safe
+
     def send_message(self, text, files=(), url=None):
         with self.lock:
+            if self.status == "waiting_user":
+                # The agent is paused on a question: this message is the answer, not a new task.
+                self.messages.append(
+                    {"id": self.msg_counter, "role": "user", "content": text, "time": time.strftime("%H:%M")}
+                )
+                self.msg_counter += 1
+                self.user_input_response = text
+                self.pending_event.set()
+                return
             if self.status in ("thinking", "running"):
                 raise RuntimeError("Assistant is currently working on an action")
             self.status = "thinking"
             if url:
                 self.current_url = url
-            if files:
-                self.files.extend([str(Path(f).resolve()) for f in files if Path(f).exists()])
 
             # Add user message
             user_msg = {
@@ -71,15 +93,24 @@ class AssistBridge:
                     self.msg_counter += 1
                     self.messages.append(asst_msg)
 
-                # 2. If action is required, drive the browser
-                if plan.get("action_required") and plan.get("goal"):
+                # 2. If the planner asked the user something, wait for the answer instead of driving blind.
+                if plan.get("questions_for_user"):
+                    with self.lock:
+                        self.status = "idle"
+                    return
+                # A concrete goal means act; the model sometimes writes one yet sets action_required false.
+                if plan.get("goal") and (plan.get("action_required") or plan.get("start_url")):
                     with self.lock:
                         self.status = "running"
 
+                    from . import relay
                     from .planner import ensure_local_server
 
                     ensure_local_server()
-                    # Use extension driver if available, else local browser
+                    # Drive the user's own tab through the extension. Never fall back to launching a separate
+                    # browser: if the extension is not attached, fail loudly instead of opening Chrome.
+                    relay.wait_connected(timeout=10)
+                    os.environ["JEV_DRIVER"] = "extension"
                     target_url = plan.get("start_url") or cur_url or "https://html.duckduckgo.com/html/"
 
                     def step_callback(step_info):

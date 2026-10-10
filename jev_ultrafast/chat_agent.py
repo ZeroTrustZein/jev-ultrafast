@@ -41,12 +41,21 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
     key = os.environ.get("PLANNER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY", "local")
     model = os.environ.get("PLANNER_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
 
+    from .planner import documents
+
     context = {
         "current_url": current_url,
         "known_profile": profile,
         "available_files": [Path(f).name for f in files],
         "conversation": conversation_history[-8:],
     }
+    # The planner reads the attachments themselves (PDF text, images, text files), not just their names.
+    parts = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
+    for f in files:
+        try:
+            parts += documents([f])
+        except (ValueError, UnicodeDecodeError, OSError) as exc:
+            parts.append({"type": "text", "text": f"Document {Path(f).name}: could not be read ({exc})"})
 
     result = post_json(
         base + "/chat/completions",
@@ -57,7 +66,7 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": CHAT_SYSTEM},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                {"role": "user", "content": parts},
             ],
         },
     )

@@ -73,7 +73,7 @@ setInterval(async () => {
   }
   try {
     const state = await (await fetch("http://127.0.0.1:8766/api/assist/state")).json();
-    if (state.status === "running" || state.status === "waiting_user") {
+    if (["thinking", "running", "waiting_user"].includes(state.status)) {
       sawRunning = true;
     } else if (sawRunning) {
       sawRunning = false;

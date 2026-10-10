@@ -477,3 +477,10 @@ def test_gear2_click_coords_dispatches_mouse_event(runner):
     assert act_arg["kind"] == "coords"
     assert act_arg["x"] == 150 and act_arg["y"] == 250
     assert runner.state["history"][-1]["gear"] == 2
+
+
+def test_endless_waits_on_unchanged_page_stop_the_run(runner):
+    for _ in range(8):
+        runner.state["decision"] = decision("wait")
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["status"] == "blocked"

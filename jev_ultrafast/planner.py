@@ -66,10 +66,24 @@ def documents(paths):
         elif path.suffix.lower() == ".pdf":
             from pypdf import PdfReader
 
-            text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
-            if not text.strip():
-                raise ValueError(f"{path.name} has no text layer (scanned). Pass a photo/screenshot of it instead.")
-            parts.append({"type": "text", "text": f"Document {path.name} (PDF):\n{text[:40000]}"})
+            reader = PdfReader(path)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            if text.strip():
+                parts.append({"type": "text", "text": f"Document {path.name} (PDF):\n{text[:40000]}"})
+            else:
+                # Scanned PDF: extract embedded page images so multimodal model can read the passport/ID
+                found = False
+                for p_idx, page in enumerate(reader.pages[:3]):
+                    for img in page.images:
+                        b64 = base64.b64encode(img.data).decode()
+                        mime = "image/jpeg" if "jp" in img.name.lower() else "image/png"
+                        parts += [
+                            {"type": "text", "text": f"Document {path.name} (page {p_idx+1} scan):"},
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                        ]
+                        found = True
+                if not found:
+                    parts.append({"type": "text", "text": f"Document {path.name}: (empty scanned PDF)"})
         else:
             parts.append({"type": "text", "text": f"Document {path.name}:\n{path.read_text(encoding='utf-8')}"})
     return parts

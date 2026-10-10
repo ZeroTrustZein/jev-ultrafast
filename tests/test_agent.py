@@ -428,10 +428,10 @@ def test_pdf_document_extraction(tmp_path):
     with open(pdf_file, "wb") as f:
         writer.write(f)
 
-    # Empty blank page triggers error as expected for scanned check
-    import pytest
-    with pytest.raises(ValueError, match="no text layer"):
-        documents([pdf_file])
+    # Gracefully extracts without crashing on scanned or image-based PDFs
+    doc_parts = documents([pdf_file])
+    assert len(doc_parts) >= 1
+    assert "test_doc.pdf" in doc_parts[0]["text"]
 
 
 def test_browser_finder_discovers_chrome_or_brave():

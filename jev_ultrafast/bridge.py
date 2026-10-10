@@ -13,6 +13,27 @@ from .model import MissingValue
 UPLOADS = Path.cwd() / "artifacts" / "uploads"
 
 
+def normalize_profile_aliases(prof):
+    aliases = {
+        "first_name": ["vorname", "first name", "given name"],
+        "family_name": ["nachname", "surname", "last name", "family name"],
+        "full_name": ["name", "fullname", "applicant name", "full name"],
+        "date_of_birth": ["geburtsdatum", "birth date", "birthday", "date of birth"],
+        "passport_number": ["passnummer", "passport", "id number", "passport number", "document number"],
+        "postal_code": ["postleitzahl", "plz", "zip", "zip code", "postal code"],
+        "nationality": ["staatsangehörigkeit", "citizenship", "nationality"],
+    }
+    for standard, syns in aliases.items():
+        val = None
+        for k in [standard] + syns:
+            if k in prof and prof[k]:
+                val = prof[k]
+                break
+        if val:
+            for k in [standard] + syns:
+                prof.setdefault(k, val)
+
+
 class AssistBridge:
     def __init__(self):
         # Re-entrant: reset() holds the lock while calling stop(), which takes it again.
@@ -76,10 +97,11 @@ class AssistBridge:
 
                 plan = chat_turn(history_for_llm, prof, current_url=cur_url, files=flist)
 
-                # Update extracted profile facts
+                # Update extracted profile facts and normalize synonyms (German/English)
                 if plan.get("extracted_profile"):
                     with self.lock:
                         self.profile.update(plan["extracted_profile"])
+                        normalize_profile_aliases(self.profile)
 
                 # Create assistant response message
                 with self.lock:

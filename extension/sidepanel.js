@@ -97,14 +97,17 @@ async function sendMessage() {
   if (!text) return;
 
   // The side panel outlives tab switches: always drive the tab the user is looking at right now.
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || /^(brave|chrome|edge|about):/.test(tab.url) || tab.url.includes("chromewebstore")) {
-    alert("Open a normal website tab first. Browser pages (brave://, chrome://, the store) can't be automated.");
-    return;
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return;
+  // Browser pages (new tab, settings, the store) can't be debugged. The agent picks the website itself, so turn
+  // this same tab into a blank page it may control, and navigate from there.
+  if (!tab.url || /^(brave|chrome|edge|about):/.test(tab.url) || tab.url.includes("chromewebstore")) {
+    tab = await chrome.tabs.update(tab.id, { url: "about:blank" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
   currentTabId = tab.id;
-  currentTabUrl = tab.url;
-  contextUrlEl.textContent = currentTabUrl;
+  currentTabUrl = tab.url && tab.url !== "about:blank" ? tab.url : "";
+  contextUrlEl.textContent = currentTabUrl || "Fresh tab (the agent will choose the website)";
 
   composerInput.value = "";
   composerInput.style.height = "auto";
@@ -118,7 +121,7 @@ async function sendMessage() {
     return;
   }
 
-  const url = lockTabCb && lockTabCb.checked ? currentTabUrl : null;
+  const url = lockTabCb && lockTabCb.checked && currentTabUrl ? currentTabUrl : null;
   const files = attachedFiles.filter((name) => !name.endsWith("(uploading…)"));
 
   try {

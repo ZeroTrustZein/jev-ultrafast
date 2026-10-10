@@ -171,7 +171,11 @@ class AssistBridge:
                         while agent.state["status"] not in {"done", "blocked"}:
                             try:
                                 for state in agent.run():
-                                    if state.get("history"):
+                                    # Each tick yields state; log an action only the first time it appears,
+                                    # otherwise re-checks of the same page repeat the last action in the panel.
+                                    if state.get("history") and state["history"][-1].get("step") not in {
+                                        s.get("step") for s in asst_msg["steps"]
+                                    }:
                                         last_h = state["history"][-1]
                                         gear = last_h.get("gear", 1)
                                         step_info = {

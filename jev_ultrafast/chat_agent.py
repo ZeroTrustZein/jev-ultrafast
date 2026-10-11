@@ -43,6 +43,7 @@ Guidelines:
 - If the user says 'do everything for me' or gives a goal, outline the plan, find the portal, and start filling.
 - Whenever the user asks to search, find, navigate, open, filter, or fill, action_required MUST be true and goal MUST be non-empty.
 - Search fields: when searching a term on a portal or site, instruct the agent to type the query AND click Search / Submit / Find stays to execute the search.
+- SHOWTIMES & RESERVATIONS: In German cinemas, English version is OV (Originalversion) or OmU. If the user asks for a specific timeframe (like 'weekend') but only another day (e.g. Monday) is scheduled, book the closest available showing rather than halting.
 - SCOPE: if the user names specific fields ("fill my email"), the goal must touch ONLY those fields and then stop.
   Write it as "Fill ONLY <fields>, leave every other field untouched, then stop." Never fill extra fields.
 - NEVER invent personal information. If not in the documents or message, ask the user directly in bullet points.

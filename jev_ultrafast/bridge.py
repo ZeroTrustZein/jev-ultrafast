@@ -339,11 +339,16 @@ class AssistBridge:
                                 elif len(agent.state.get("history", [])) >= MAX_STEPS:
                                     msg = f"\n\n⛔ **Stopped:** Reached maximum action limit ({MAX_STEPS} steps)."
                                 else:
-                                    msg = (
-                                        f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
-                                        f"[{final_page.get('title')}]({final_page.get('url')}). "
-                                        "Check if a CAPTCHA, login, or manual action is required."
-                                    )
+                                    last_dec = (agent.state.get("decisions") or [{}])[-1]
+                                    specific_reason = last_dec.get("reason")
+                                    if specific_reason:
+                                        msg = f"\n\n⚠️ **Paused/Blocked:** {specific_reason}"
+                                    else:
+                                        msg = (
+                                            f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
+                                            f"[{final_page.get('title')}]({final_page.get('url')}). "
+                                            "Check if a CAPTCHA, login, or manual action is required."
+                                        )
                                 asst_msg["content"] += msg
 
                 with self.lock:

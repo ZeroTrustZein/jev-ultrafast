@@ -328,9 +328,12 @@ class AssistBridge:
                         with self.lock:
                             self.current_url = final_page.get("url")
                             if agent.state["status"] == "done":
+                                from .chat_agent import synthesize_outcome
+
+                                summary = synthesize_outcome(agent.state["goal"], final_page)
                                 asst_msg["content"] += (
                                     f"\n\n✅ **Completed!** Finished on page: [{final_page.get('title')}]"
-                                    f"({final_page.get('url')})"
+                                    f"({final_page.get('url')})\n\n{summary}"
                                 )
                             elif agent.state["status"] == "blocked":
                                 reason = agent.state.get("denied")

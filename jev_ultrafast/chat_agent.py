@@ -87,3 +87,47 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
         },
     )
     return json_content(result)
+
+
+SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent just reached the final page for the user's goal.
+Read the page title, URL, and visible page text to provide a concise, high-value summary of what was found or completed.
+Key instructions:
+- If showtimes, flights, or tickets were found: specify the theater/airline, exact date/time, and format (e.g. note that OV means English Original Version).
+- If an application/form was processed: summarize the fields filled and the current status.
+- State the immediate next action available (e.g. 'Click ExpressTicket to select seats', or 'Form ready for review').
+Format as 2-4 clean markdown bullet points. Keep it under 100 words. No fluff."""
+
+
+def synthesize_outcome(goal, page):
+    if not page or not page.get("text"):
+        return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
+    base = (os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")).rstrip("/")
+    key = os.environ.get("PLANNER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY", "local")
+    model = os.environ.get("PLANNER_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
+
+    prompt = (
+        f"USER GOAL: {goal}\n"
+        f"FINAL PAGE TITLE: {page.get('title', '')}\n"
+        f"FINAL PAGE URL: {page.get('url', '')}\n"
+        f"PAGE TEXT CONTENT:\n{page.get('text', '')[:4000]}"
+    )
+    try:
+        res = post_json(
+            base + "/chat/completions",
+            key,
+            {
+                "model": model,
+                "max_tokens": 300,
+                "reasoning_effort": "low",
+                "messages": [
+                    {"role": "system", "content": SYNTHESIS_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+            },
+        )
+        msg = (res.get("choices") or [{}])[0].get("message", {})
+        content = msg.get("content") or ""
+        return content.strip()
+    except Exception:
+        return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
+

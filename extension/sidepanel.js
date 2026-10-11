@@ -304,7 +304,10 @@ if (newChatBtn) newChatBtn.addEventListener("click", async () => {
 });
 
 // 7. Poll State
+let pollTimeout = null;
 async function pollChat() {
+  clearTimeout(pollTimeout);
+  let nextDelay = 1000;
   try {
     const res = await fetch(`${BASE}/api/chat/state`);
     const state = await res.json();
@@ -312,53 +315,75 @@ async function pollChat() {
     serverDot.className = "dot online";
     serverText.textContent = "Online";
 
-    // Toggle Send / Stop
+    // Toggle Send / Stop & increase poll frequency while running
     if (state.status === "running" || state.status === "thinking") {
       stopBtn.style.display = "flex";
       sendBtn.style.display = "none";
+      nextDelay = 200; // 200ms ultra-fast live streaming during execution
     } else {
       stopBtn.style.display = "none";
       sendBtn.style.display = "flex";
+      nextDelay = 1000;
     }
 
     // Render messages
     if (state.messages && state.messages.length > 0) {
       if (welcomeCard) welcomeCard.style.display = "none";
-      renderMessages(state.messages);
+      renderMessages(state.messages, state.status);
     }
   } catch (_) {
     serverDot.className = "dot";
     serverText.textContent = "Offline";
+    nextDelay = 2000;
   }
+  pollTimeout = setTimeout(pollChat, nextDelay);
 }
 
 let lastRendered = "";
-function renderMessages(messages) {
-  // Redraw only when the conversation actually changed, and only follow new output if the user is already at the
-  // bottom; otherwise scrolling up to read gets yanked back down every poll.
-  const snapshot = JSON.stringify(messages);
+function renderMessages(messages, currentStatus) {
+  // Redraw only when the conversation actually changed
+  const isAgentRunning = (currentStatus === "running");
+  const snapshot = JSON.stringify({ messages, currentStatus });
   if (snapshot === lastRendered) return;
   lastRendered = snapshot;
-  const atBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 40;
+  const atBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 50;
   const openDrawers = new Set(
     [...chatContainer.querySelectorAll("details.steps-drawer")].map((d, i) => (d.open ? i : -1)).filter((i) => i >= 0)
   );
-  chatContainer.innerHTML = messages.map((m) => {
+  chatContainer.innerHTML = messages.map((m, mIdx) => {
     const isUser = m.role === "user";
+    const isLastAsst = (!isUser && mIdx === messages.length - 1);
+    const shouldAutoOpen = (isLastAsst && isAgentRunning);
+
     let stepsHtml = "";
     if (m.steps && m.steps.length > 0) {
       stepsHtml = `
-        <details class="steps-drawer">
-          <summary>Execution Steps (${m.steps.length})</summary>
+        <details class="steps-drawer" ${shouldAutoOpen ? "open" : ""}>
+          <summary>Execution Steps (${m.steps.length}) ${shouldAutoOpen ? '⚡ Live' : ''}</summary>
           <div class="steps-list">
-            ${m.steps.map(s => `
-              <div class="step-item">
-                <span class="gear-pill g${s.gear}">G${s.gear}</span>
-                <span>${escapeHtml(s.action || s.kind)}</span>
-              </div>
-            `).join("")}
+            ${m.steps.map((s, sIdx) => {
+              const isLatest = (sIdx === m.steps.length - 1 && isLastAsst && isAgentRunning);
+              return `
+                <div class="step-item ${isLatest ? 'live-latest' : ''}">
+                  ${isLatest ? '<span class="step-pulse"></span>' : ''}
+                  <span class="gear-pill g${s.gear}">G${s.gear}</span>
+                  <span>${escapeHtml(s.action || s.kind)}</span>
+                </div>
+              `;
+            }).join("")}
           </div>
         </details>
+      `;
+    }
+
+    let liveTickerHtml = "";
+    if (isLastAsst && isAgentRunning) {
+      const lastStep = m.steps && m.steps.length > 0 ? (m.steps[m.steps.length - 1].action || m.steps[m.steps.length - 1].kind) : "Starting agent...";
+      liveTickerHtml = `
+        <div class="live-action-ticker">
+          <span class="step-pulse"></span>
+          <span>⚡ Running: ${escapeHtml(lastStep)}</span>
+        </div>
       `;
     }
 
@@ -376,6 +401,7 @@ function renderMessages(messages) {
       <div class="msg-row ${isUser ? 'user' : 'assistant'}">
         <div class="msg-bubble">
           ${stepsHtml}
+          ${liveTickerHtml}
           <div>${formatMarkdown(m.content || "")}</div>
           ${approvalHtml}
         </div>
@@ -384,11 +410,11 @@ function renderMessages(messages) {
     `;
   }).join("");
 
-  // Keep drawers the user expanded open; new drawers start collapsed.
+  // Keep drawers the user expanded open
   chatContainer.querySelectorAll("details.steps-drawer").forEach((d, i) => {
     if (openDrawers.has(i)) d.open = true;
   });
-  if (atBottom) chatContainer.scrollTop = chatContainer.scrollHeight;
+  if (atBottom || isAgentRunning) chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
 // User response handler for approvals or prompt inputs
@@ -431,5 +457,4 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-setInterval(pollChat, 500);
 pollChat();

@@ -15,18 +15,43 @@ CLIENT = httpx.Client(http2=True, timeout=120)
 
 
 def post_json(url, key, body):
-    for attempt in range(3):
-        try:
-            response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
-        except httpx.HTTPError:
-            raise RuntimeError("Model connection failed; no action executed.") from None
-        if response.status_code in {429, 529, 503} and attempt < 2:
-            time.sleep(0.5 * 2**attempt)
+    current_body = dict(body)
+    for _ in range(5):
+        res = None
+        for attempt in range(3):
+            try:
+                response = CLIENT.post(url, json=current_body, headers={"Authorization": f"Bearer {key}"})
+            except httpx.HTTPError:
+                raise RuntimeError("Model connection failed; no action executed.") from None
+            if response.status_code in {429, 529, 503} and attempt < 2:
+                time.sleep(0.5 * 2**attempt)
+                continue
+            if response.is_error:
+                raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
+            res = response.json()
+            break
+        if not res:
+            raise RuntimeError("Model unavailable")
+
+        choice = (res.get("choices") or [{}])[0]
+        # Auto-drain server-side gateway tool calls (e.g. OmniRoute memory_save)
+        if choice.get("finish_reason") == "tool_calls" and choice.get("message", {}).get("tool_calls"):
+            msg = choice["message"]
+            tool_results = res.get("tool_results") or []
+            tool_outputs = {tr.get("tool_call_id"): tr.get("output", "{\"success\":true}") for tr in tool_results}
+            messages = list(current_body.get("messages", []))
+            messages.append(msg)
+            for tc in msg.get("tool_calls", []):
+                t_id = tc.get("id")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": t_id,
+                    "content": tool_outputs.get(t_id, "{\"success\":true}"),
+                })
+            current_body["messages"] = messages
             continue
-        if response.is_error:
-            raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
-        return response.json()
-    raise RuntimeError("Model unavailable")
+        return res
+    return res
 
 
 def json_content(result):

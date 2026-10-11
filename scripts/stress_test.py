@@ -16,6 +16,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
 from websockets.asyncio.client import connect
 
@@ -93,7 +94,9 @@ def run_chat(message, url=None, answers=None, timeout=240):
             reply = None
             if last.get("is_approval"):
                 reply = answers.get("approve", "no")
-            elif s["status"] in ("waiting_user", "idle") or last.get("missing_field"):
+            elif s["status"] == "waiting_user" or last.get("missing_field") or (
+                s["status"] == "idle" and ("?" in text or "what" in text.lower() or "need" in text.lower()) and "completed" not in text.lower()
+            ):
                 reply = next((v for k, v in answers.items() if k != "approve" and k.lower() in text.lower()), None)
             if reply is not None:
                 seen.append(text[:160])
@@ -234,6 +237,7 @@ def setup(kind):
 
 
 def main():
+    ensure_daemon()
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", default="")
     parser.add_argument("--out", default="artifacts/stress.jsonl")

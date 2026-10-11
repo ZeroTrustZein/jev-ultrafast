@@ -99,6 +99,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, json.dumps(response_state()))
         if path in ("/api/assist/state", "/api/chat/state"):
             return self.send(200, json.dumps(BRIDGE.get_state()))
+        if path in ("/api/assist/history", "/api/chat/history"):
+            return self.send(200, json.dumps(BRIDGE.list_history()))
         if path == "/demo.mp4":
             video = ROOT.parent / "docs" / "demo.mp4"
             if video.exists():
@@ -153,6 +155,12 @@ class Handler(BaseHTTPRequestHandler):
                 elif path in ("/api/assist/stop", "/api/chat/stop"):
                     BRIDGE.stop()
                     return self.send(200, json.dumps({"status": "stopped"}))
+                elif path in ("/api/assist/history/load", "/api/chat/history/load"):
+                    state = BRIDGE.load_session(body.get("id"))
+                    return self.send(200, json.dumps(state))
+                elif path in ("/api/assist/history/new", "/api/chat/history/new"):
+                    state = BRIDGE.new_session()
+                    return self.send(200, json.dumps(state))
                 elif path == "/api/chat/reset":
                     BRIDGE.reset()
                     return self.send(200, json.dumps({"status": "reset"}))

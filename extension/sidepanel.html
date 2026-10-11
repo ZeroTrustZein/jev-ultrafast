@@ -15,6 +15,7 @@
       <span class="model-badge">Hybrid 75ms</span>
     </div>
     <div class="header-actions">
+      <button id="history-btn" class="icon-btn" title="View past sessions">📜</button>
       <button id="reset-btn" class="icon-btn" title="Start new conversation">🔄</button>
       <div class="status-indicator" id="status-indicator" title="Backend Server Status">
         <span class="dot" id="server-dot"></span>
@@ -27,7 +28,7 @@
   <div class="context-bar">
     <span class="context-icon">🌐</span>
     <span class="context-url" id="context-url" title="Current tab">Detecting active tab...</span>
-    <label class="lock-tab-label" title="Lock agent strictly to this tab">
+    <label class="lock-tab-label" title="Lock agent strictly to current active tab instead of dedicated [Jev Agent] tab group">
       <input type="checkbox" id="lock-tab-cb"> Lock tab
     </label>
   </div>
@@ -44,6 +45,20 @@
       </div>
     </div>
   </main>
+
+  <!-- History Flyout Panel -->
+  <div class="history-overlay" id="history-overlay" style="display:none;">
+    <div class="history-panel">
+      <div class="history-top">
+        <span class="history-title">Chat History</span>
+        <button id="history-close-btn" class="icon-btn" title="Close history">×</button>
+      </div>
+      <div class="history-list" id="history-list"></div>
+      <div class="history-bottom">
+        <button id="new-chat-btn" class="btn-small allow" style="width:100%;padding:8px 12px;cursor:pointer;">+ New Conversation</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Bottom Composer -->
   <footer class="composer-container">

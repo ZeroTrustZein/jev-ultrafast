@@ -101,6 +101,10 @@ class Browser:
             cdp = relay.cdp
             # target stays None so close() never closes the user's own tab.
             self.target, self.session = None, "extension"
+            try:
+                self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+            except Exception:
+                pass
             if url and url != self.evaluate("location.href"):
                 self.call("Page.navigate", url=url)
                 time.sleep(0.3)  # let the old document unload before polling readyState

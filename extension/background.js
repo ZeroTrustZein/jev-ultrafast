@@ -14,6 +14,9 @@ async function attach(id) {
   if (tabId !== null) await detach();
   await chrome.debugger.attach({ tabId: id }, "1.3");
   tabId = id;
+  try {
+    await chrome.debugger.sendCommand(debuggee(), "Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch (_) {}
 }
 
 async function detach() {

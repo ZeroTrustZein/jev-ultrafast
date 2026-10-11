@@ -1,6 +1,7 @@
 const BASE = "http://127.0.0.1:8766";
 let currentTabUrl = "";
 let currentTabId = null;
+let agentTabId = null;
 let attachedFiles = [];
 let lastMessageCount = 0;
 
@@ -13,10 +14,24 @@ const composerInput = document.getElementById("composer-input");
 const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
 const resetBtn = document.getElementById("reset-btn");
+const historyBtn = document.getElementById("history-btn");
+const historyOverlay = document.getElementById("history-overlay");
+const historyCloseBtn = document.getElementById("history-close-btn");
+const historyList = document.getElementById("history-list");
+const newChatBtn = document.getElementById("new-chat-btn");
 const filePicker = document.getElementById("file-picker");
 const attachmentsList = document.getElementById("attachments-list");
 const serverDot = document.getElementById("server-dot");
 const serverText = document.getElementById("server-text");
+
+// Click context bar to view/focus agent tab
+contextUrlEl.style.cursor = "pointer";
+contextUrlEl.title = "Click to focus agent tab";
+contextUrlEl.addEventListener("click", () => {
+  if (agentTabId) {
+    chrome.tabs.update(agentTabId, { active: true }).catch(() => {});
+  }
+});
 
 // 1. Detect current browser tab
 if (typeof chrome !== "undefined" && chrome.tabs) {
@@ -25,10 +40,81 @@ if (typeof chrome !== "undefined" && chrome.tabs) {
       currentTabId = tabs[0].id;
       if (tabs[0].url) {
         currentTabUrl = tabs[0].url;
-        contextUrlEl.textContent = currentTabUrl;
+        if (!agentTabId) {
+          contextUrlEl.textContent = currentTabUrl;
+        }
       }
     }
   });
+
+  if (chrome.tabs.onRemoved) {
+    chrome.tabs.onRemoved.addListener((id) => {
+      if (id === agentTabId) {
+        agentTabId = null;
+        contextUrlEl.textContent = "Agent tab closed";
+      }
+    });
+  }
+}
+
+// Dedicated Agent Tab & Tab Group helper
+async function getOrCreateAgentTab(preferredUrl) {
+  if (lockTabCb && lockTabCb.checked) {
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      if (!tab.url || /^(brave|chrome|edge|about):/.test(tab.url) || tab.url.includes("chromewebstore")) {
+        tab = await chrome.tabs.update(tab.id, { url: "about:blank" });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      agentTabId = tab.id;
+      return tab;
+    }
+  }
+
+  if (agentTabId !== null) {
+    try {
+      const tab = await chrome.tabs.get(agentTabId);
+      if (tab) return tab;
+    } catch (_) {
+      agentTabId = null;
+    }
+  }
+
+  if (chrome.tabGroups && chrome.tabGroups.query) {
+    try {
+      const groups = await chrome.tabGroups.query({ title: "Jev Agent" });
+      for (const group of groups) {
+        const tabs = await chrome.tabs.query({ groupId: group.id });
+        if (tabs && tabs.length > 0) {
+          agentTabId = tabs[0].id;
+          return tabs[0];
+        }
+      }
+    } catch (e) {
+      console.warn("Could not query tab groups:", e);
+    }
+  }
+
+  const startUrl = preferredUrl && preferredUrl !== "about:blank" ? preferredUrl : "about:blank";
+  const newTab = await chrome.tabs.create({ url: startUrl, active: false });
+  agentTabId = newTab.id;
+
+  if (chrome.tabs.group) {
+    try {
+      const groupId = await chrome.tabs.group({ tabIds: [newTab.id] });
+      if (chrome.tabGroups && chrome.tabGroups.update) {
+        await chrome.tabGroups.update(groupId, {
+          title: "Jev Agent",
+          color: "purple",
+          collapsed: false,
+        });
+      }
+    } catch (err) {
+      console.warn("Could not group agent tab:", err);
+    }
+  }
+
+  return newTab;
 }
 
 // 2. Auto-grow composer textarea
@@ -96,32 +182,34 @@ async function sendMessage() {
   const text = composerInput.value.trim();
   if (!text) return;
 
-  // The side panel outlives tab switches: always drive the tab the user is looking at right now.
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  // Browser pages (new tab, settings, the store) can't be debugged. The agent picks the website itself, so turn
-  // this same tab into a blank page it may control, and navigate from there.
-  if (!tab.url || /^(brave|chrome|edge|about):/.test(tab.url) || tab.url.includes("chromewebstore")) {
-    tab = await chrome.tabs.update(tab.id, { url: "about:blank" });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  // Determine starting URL context (from user's active tab if on a regular page)
+  let [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let seedUrl = "";
+  if (activeTab && activeTab.url && !/^(brave|chrome|edge|about):/.test(activeTab.url) && !activeTab.url.includes("chromewebstore")) {
+    seedUrl = activeTab.url;
   }
+
+  const tab = await getOrCreateAgentTab(seedUrl);
+  if (!tab) return;
+
   currentTabId = tab.id;
   currentTabUrl = tab.url && tab.url !== "about:blank" ? tab.url : "";
-  contextUrlEl.textContent = currentTabUrl || "Fresh tab (the agent will choose the website)";
+  const isLocked = lockTabCb && lockTabCb.checked;
+  contextUrlEl.textContent = isLocked ? currentTabUrl : `📁 [Jev Agent] ${currentTabUrl || "about:blank"}`;
 
   composerInput.value = "";
   composerInput.style.height = "auto";
   sendBtn.classList.remove("active");
   if (welcomeCard) welcomeCard.style.display = "none";
 
-  // Attach to this tab before the agent starts; a failure here must be visible, not swallowed.
+  // Attach to agent tab before starting
   const attached = await chrome.runtime.sendMessage({ type: "attach", tabId: currentTabId });
   if (!attached || !attached.ok) {
-    alert("Could not take control of this tab: " + ((attached && attached.error) || "unknown error"));
+    alert("Could not take control of agent tab: " + ((attached && attached.error) || "unknown error"));
     return;
   }
 
-  const url = lockTabCb && lockTabCb.checked && currentTabUrl ? currentTabUrl : null;
+  const url = isLocked && currentTabUrl ? currentTabUrl : (currentTabUrl || null);
   const files = attachedFiles.filter((name) => !name.endsWith("(uploading…)"));
 
   try {
@@ -156,12 +244,63 @@ stopBtn.addEventListener("click", async () => {
 
 resetBtn.addEventListener("click", async () => {
   try {
-    await fetch(`${BASE}/api/chat/reset`, { method: "POST" });
+    await fetch(`${BASE}/api/chat/history/new`, { method: "POST" });
     chatContainer.innerHTML = "";
     if (welcomeCard) chatContainer.appendChild(welcomeCard);
     welcomeCard.style.display = "block";
     lastMessageCount = 0;
+    lastRendered = "";
+    pollChat();
   } catch (_) {}
+});
+
+// History Panel Toggle & Selection
+async function toggleHistory(show) {
+  if (show === undefined) show = historyOverlay.style.display === "none";
+  historyOverlay.style.display = show ? "flex" : "none";
+  if (show) {
+    try {
+      const res = await fetch(`${BASE}/api/chat/history`);
+      const list = await res.json();
+      historyList.innerHTML = list.length === 0
+        ? '<div style="color:#94a3b8;text-align:center;margin-top:24px;">No past sessions yet</div>'
+        : list.map(s => `
+          <div class="history-item ${s.active ? 'active' : ''}" data-id="${s.id}">
+            <div class="history-item-title">${escapeHtml(s.title || 'Untitled Session')}</div>
+            <div class="history-item-meta">
+              <span>${s.message_count} messages</span>
+              <span>${s.updated_at || ''}</span>
+            </div>
+          </div>
+        `).join("");
+
+      document.querySelectorAll(".history-item").forEach(el => {
+        el.addEventListener("click", async () => {
+          const id = el.getAttribute("data-id");
+          await fetch(`${BASE}/api/chat/history/load`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id })
+          });
+          toggleHistory(false);
+          lastRendered = "";
+          pollChat();
+        });
+      });
+    } catch (_) {}
+  }
+}
+
+if (historyBtn) historyBtn.addEventListener("click", () => toggleHistory());
+if (historyCloseBtn) historyCloseBtn.addEventListener("click", () => toggleHistory(false));
+if (newChatBtn) newChatBtn.addEventListener("click", async () => {
+  await fetch(`${BASE}/api/chat/history/new`, { method: "POST" });
+  toggleHistory(false);
+  lastRendered = "";
+  chatContainer.innerHTML = "";
+  if (welcomeCard) chatContainer.appendChild(welcomeCard);
+  welcomeCard.style.display = "block";
+  pollChat();
 });
 
 // 7. Poll State

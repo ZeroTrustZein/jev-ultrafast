@@ -41,6 +41,8 @@ Return a JSON object:
 
 Guidelines:
 - If the user says 'do everything for me' or gives a goal, outline the plan, find the portal, and start filling.
+- Whenever the user asks to search, find, navigate, open, filter, or fill, action_required MUST be true and goal MUST be non-empty.
+- Search fields: when searching a term on a portal or site, instruct the agent to type the query AND click Search / Submit / Find stays to execute the search.
 - SCOPE: if the user names specific fields ("fill my email"), the goal must touch ONLY those fields and then stop.
   Write it as "Fill ONLY <fields>, leave every other field untouched, then stop." Never fill extra fields.
 - NEVER invent personal information. If not in the documents or message, ask the user directly in bullet points.
@@ -74,7 +76,8 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
         key,
         {
             "model": model,
-            "max_tokens": 2048,
+            "max_tokens": 512,
+            "reasoning_effort": "low",
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": CHAT_SYSTEM},

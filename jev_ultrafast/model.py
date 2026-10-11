@@ -205,18 +205,30 @@ def field_text(context):
     key = os.environ.get("TEXT_MODEL_API_KEY")
     if not key:
         raise ValueError("TYPE_TEXT needs TEXT_MODEL_API_KEY; no text is hardcoded or guessed by the executor.")
+
+    # Fast path: direct match in known profile facts without network roundtrip
+    prof = context.get("profile") or {}
+    field_label = (context.get("field", {}).get("label") or "").strip().lower()
+    if prof and field_label:
+        clean_key = re.sub(r"[^a-z0-9_]+", "", field_label.replace(" ", "_"))
+        for k in (clean_key, field_label):
+            if k in prof and prof[k]:
+                return str(prof[k]), {"model": "fast-profile", "latency_ms": 0, "usage": {}}
+
     base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
     model = os.environ.get("TEXT_MODEL", "deepseek-chat")
-    reasoning = {"thinking": {"type": "disabled"}} if "api.deepseek.com/" in base else {"reasoning": {"effort": "low"}}
-    if os.environ.get("TEXT_MODEL_REASONING") == "none":
-        reasoning = {"reasoning": {"enabled": False}}
+    reasoning = {"reasoning_effort": "low"}
+    if "api.deepseek.com/" in base:
+        reasoning = {"thinking": {"type": "disabled"}}
+    elif os.environ.get("TEXT_MODEL_REASONING") == "none":
+        reasoning = {"reasoning_effort": "none"}
     started = time.perf_counter()
     result = post_json(
         base + "/chat/completions",
         key,
         {
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": 120,
             "response_format": {"type": "json_object"},
             **reasoning,
             "messages": [
@@ -303,6 +315,7 @@ ELEMENT TABLE:
         {
             "model": model,
             "max_tokens": 1024,
+            "reasoning_effort": "low",
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": VISION_SYSTEM},

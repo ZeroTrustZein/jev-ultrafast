@@ -199,6 +199,8 @@ class Agent:
             # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
+            if action["kind"] in {"click", "select", "coords"}:
+                time.sleep(0.15)
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
             # Record execution before observing. A stale post-action observation must not erase the action.
             state["history"].append(
@@ -235,7 +237,12 @@ class Agent:
                     base64.b64decode(state["page"]["screenshot"])
                 )
             repeated = state["history"][-3:]
-            stuck = len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated)
+            gear2_tried = any(h.get("gear") == 2 for h in repeated)
+            stuck = (
+                len(repeated) == 3
+                and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated)
+                and gear2_tried
+            )
             # A few WAITs cover slow loads; a long run of them on an unchanged page means there is no next step.
             waits = state["history"][-8:]
             idle = len(waits) == 8 and all(h["kind"] == "wait" and h["page_changed"] is False for h in waits)

@@ -1,5 +1,6 @@
 """Conversational session manager and extension bridge for Jev Assist."""
 
+import json
 import os
 import threading
 import time
@@ -8,9 +9,11 @@ from pathlib import Path
 from .agent import Agent
 from .chat_agent import chat_turn
 from .model import MissingValue
+from .questions import MAX_STEPS
 
 # Side-panel attachments land here (artifacts/ is git-ignored), so the agent can read and upload them.
 UPLOADS = Path.cwd() / "artifacts" / "uploads"
+HISTORY_DIR = Path.cwd() / "artifacts" / "history"
 
 
 def normalize_profile_aliases(prof):
@@ -48,6 +51,101 @@ class AssistBridge:
         self.user_input_response = None
         self.worker_thread = None
         self.msg_counter = 1
+        self.session_id = f"sess_{int(time.time() * 1000)}"
+        self.title = "New conversation"
+        self._load_latest_or_init()
+
+    def _save_session(self):
+        try:
+            if not self.messages:
+                return
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            first_user = next((m.get("content") for m in self.messages if m.get("role") == "user"), None)
+            if first_user and self.title == "New conversation":
+                self.title = first_user[:45].replace("\n", " ").strip()
+            data = {
+                "id": self.session_id,
+                "title": self.title,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M"),
+                "messages": self.messages,
+                "profile": self.profile,
+                "files": self.files,
+                "current_url": self.current_url,
+                "status": self.status,
+            }
+            (HISTORY_DIR / f"{self.session_id}.json").write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _load_latest_or_init(self):
+        try:
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            files = sorted(HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+            if files:
+                data = json.loads(files[0].read_text(encoding="utf-8"))
+                self.session_id = data.get("id", files[0].stem)
+                self.title = data.get("title", "Conversation")
+                self.messages = data.get("messages", [])
+                self.profile = data.get("profile", {})
+                self.files = data.get("files", [])
+                self.current_url = data.get("current_url")
+                self.status = "idle"
+                self.msg_counter = max([m.get("id", 0) for m in self.messages] + [0]) + 1
+        except Exception:
+            pass
+
+    def list_history(self):
+        try:
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            sessions = []
+            for p in sorted(HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    sessions.append({
+                        "id": data.get("id", p.stem),
+                        "title": data.get("title", "Untitled"),
+                        "updated_at": data.get("updated_at", ""),
+                        "message_count": len(data.get("messages", [])),
+                        "active": (data.get("id") == self.session_id),
+                    })
+                except Exception:
+                    continue
+            return sessions
+        except Exception:
+            return []
+
+    def load_session(self, sess_id):
+        self.stop()
+        p = HISTORY_DIR / f"{sess_id}.json"
+        if not p.exists():
+            raise ValueError(f"Session {sess_id} not found")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        with self.lock:
+            self.session_id = data.get("id", sess_id)
+            self.title = data.get("title", "Conversation")
+            self.messages = data.get("messages", [])
+            self.profile = data.get("profile", {})
+            self.files = data.get("files", [])
+            self.current_url = data.get("current_url")
+            self.status = "idle"
+            self.msg_counter = max([m.get("id", 0) for m in self.messages] + [0]) + 1
+        return self.get_state()
+
+    def new_session(self):
+        self._save_session()
+        self.stop()
+        with self.lock:
+            self.session_id = f"sess_{int(time.time() * 1000)}"
+            self.title = "New conversation"
+            self.messages = []
+            self.profile = {}
+            self.files = []
+            self.current_url = None
+            self.status = "idle"
+            self.msg_counter = 1
+        return self.get_state()
 
     def add_file(self, name, data):
         """Store a file the user attached in the side panel; the agent may read it or upload it to forms."""
@@ -122,8 +220,11 @@ class AssistBridge:
                     return
                 # Act when the planner formed a goal, navigated to a start_url, or requested action.
                 goal = (plan.get("goal") or "").strip()
-                should_act = bool(plan.get("start_url")) or (plan.get("action_required") is not False and bool(goal))
-                if goal and should_act:
+                action_required = plan.get("action_required") is True or bool(plan.get("start_url"))
+                if action_required and not goal:
+                    goal = text.strip()
+                should_act = action_required and bool(goal)
+                if should_act:
                     with self.lock:
                         self.status = "running"
 
@@ -140,6 +241,7 @@ class AssistBridge:
                     def step_callback(step_info):
                         with self.lock:
                             asst_msg["steps"].append(step_info)
+                            self._save_session()
 
                     def approve_callback(action):
                         with self.lock:
@@ -157,6 +259,7 @@ class AssistBridge:
                             }
                             self.msg_counter += 1
                             self.messages.append(ask_msg)
+                            self._save_session()
                             self.pending_event.clear()
                             self.user_input_response = None
 
@@ -203,6 +306,7 @@ class AssistBridge:
                                     }
                                     self.msg_counter += 1
                                     self.messages.append(ask_msg)
+                                    self._save_session()
                                     self.pending_event.clear()
                                     self.user_input_response = None
 
@@ -210,8 +314,13 @@ class AssistBridge:
                                 self.pending_event.wait(timeout=300)
                                 with self.lock:
                                     ans = self.user_input_response or ""
+                                    field_key = missing.field.lower().replace("-", "_").replace(" ", "_")
                                     self.profile[missing.field] = ans
+                                    self.profile[field_key] = ans
                                     agent.profile[missing.field] = ans
+                                    agent.profile[field_key] = ans
+                                    normalize_profile_aliases(self.profile)
+                                    normalize_profile_aliases(agent.profile)
                                     agent.state["goal"] += f"\nUser provided {missing.field}: {ans}"
                                     self.status = "running"
 
@@ -223,9 +332,23 @@ class AssistBridge:
                                     f"\n\n✅ **Completed!** Finished on page: [{final_page.get('title')}]"
                                     f"({final_page.get('url')})"
                                 )
+                            elif agent.state["status"] == "blocked":
+                                reason = agent.state.get("denied")
+                                if reason:
+                                    msg = f"\n\n⛔ **Stopped:** Sensitive action '{reason}' was not approved."
+                                elif len(agent.state.get("history", [])) >= MAX_STEPS:
+                                    msg = f"\n\n⛔ **Stopped:** Reached maximum action limit ({MAX_STEPS} steps)."
+                                else:
+                                    msg = (
+                                        f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
+                                        f"[{final_page.get('title')}]({final_page.get('url')}). "
+                                        "Check if a CAPTCHA, login, or manual action is required."
+                                    )
+                                asst_msg["content"] += msg
 
                 with self.lock:
                     self.status = "idle"
+                    self._save_session()
             except Exception as exc:
                 with self.lock:
                     self.status = "error"
@@ -237,6 +360,7 @@ class AssistBridge:
                     }
                     self.msg_counter += 1
                     self.messages.append(err_msg)
+                    self._save_session()
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -254,21 +378,18 @@ class AssistBridge:
             if self.active_agent:
                 self.active_agent.state["status"] = "blocked"
             worker = self.worker_thread
+            self._save_session()
         if worker and worker.is_alive() and worker != threading.current_thread():
             worker.join(timeout=2.0)
 
     def reset(self):
-        self.stop()
-        with self.lock:
-            self.messages = []
-            self.profile = {}
-            self.files = []
-            self.current_url = None
-            self.status = "idle"
+        return self.new_session()
 
     def get_state(self):
         with self.lock:
             return {
+                "id": self.session_id,
+                "title": self.title,
                 "status": self.status,
                 "messages": list(self.messages),
                 "profile": dict(self.profile),

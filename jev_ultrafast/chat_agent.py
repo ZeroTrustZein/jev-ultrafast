@@ -41,6 +41,8 @@ Return a JSON object:
 
 Guidelines:
 - If the user says 'do everything for me' or gives a goal, outline the plan, find the portal, and start filling.
+- SCOPE: if the user names specific fields ("fill my email"), the goal must touch ONLY those fields and then stop.
+  Write it as "Fill ONLY <fields>, leave every other field untouched, then stop." Never fill extra fields.
 - NEVER invent personal information. If not in the documents or message, ask the user directly in bullet points.
 - Always warn before final submission or payment. Never submit without explicit user go-ahead.
 """
@@ -64,7 +66,7 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
     for f in files:
         try:
             parts += documents([f])
-        except (ValueError, UnicodeDecodeError, OSError) as exc:
+        except Exception as exc:  # a corrupt or exotic file must never abort the whole task
             parts.append({"type": "text", "text": f"Document {Path(f).name}: could not be read ({exc})"})
 
     result = post_json(

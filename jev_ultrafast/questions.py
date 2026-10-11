@@ -8,6 +8,8 @@ Set every requested filter/control; a matching result alone does not prove a req
 Do not toggle a checkbox, switch, or radio already in the requested state.
 When a file input needs a document and UPLOAD is offered, UPLOAD it; never CLICK a file input.
 Submit populated search fields before opening a result; a populated field alone is not an applied search.
+If the goal specifies filling ONLY certain fields, touch only those fields and choose DONE once they are filled;
+do not type into or ask about other fields on the form.
 WAIT only when the needed control is absent/disabled, or submitted results are still loading.
 If Search/Submit is visible and the required fields are ready, CLICK it immediately.
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT.

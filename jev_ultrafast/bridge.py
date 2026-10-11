@@ -120,8 +120,10 @@ class AssistBridge:
                     with self.lock:
                         self.status = "idle"
                     return
-                # A concrete goal means act; the model sometimes writes one yet sets action_required false.
-                if plan.get("goal") and (plan.get("action_required") or plan.get("start_url")):
+                # Act when the planner formed a goal, navigated to a start_url, or requested action.
+                goal = (plan.get("goal") or "").strip()
+                should_act = bool(plan.get("start_url")) or (plan.get("action_required") is not False and bool(goal))
+                if goal and should_act:
                     with self.lock:
                         self.status = "running"
 
@@ -165,7 +167,7 @@ class AssistBridge:
                             return res in ("y", "yes", "true", "allow")
 
                     with Agent(
-                        target_url, plan["goal"], profile=self.profile, approve=approve_callback, files=self.files
+                        target_url, goal, profile=self.profile, approve=approve_callback, files=self.files
                     ) as agent:
                         self.active_agent = agent
                         while agent.state["status"] not in {"done", "blocked"}:
@@ -245,15 +247,19 @@ class AssistBridge:
             self.pending_event.set()
 
     def stop(self):
+        worker = None
         with self.lock:
             self.pending_event.set()
             self.status = "idle"
             if self.active_agent:
                 self.active_agent.state["status"] = "blocked"
+            worker = self.worker_thread
+        if worker and worker.is_alive() and worker != threading.current_thread():
+            worker.join(timeout=2.0)
 
     def reset(self):
+        self.stop()
         with self.lock:
-            self.stop()
             self.messages = []
             self.profile = {}
             self.files = []

@@ -90,7 +90,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.headers.get("Host") != f"127.0.0.1:{PORT}":
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if host not in {"127.0.0.1", "localhost"}:
             return self.send(403, "Forbidden", "text/plain")
         path = urlparse(self.path).path
         if path == "/api/state":
@@ -116,7 +117,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, content, mime + "; charset=utf-8")
 
     def do_POST(self):
-        if self.headers.get("Host") != f"127.0.0.1:{PORT}":
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if host not in {"127.0.0.1", "localhost"}:
             return self.send(403, json.dumps({"error": "Local demo requests only"}))
         path = urlparse(self.path).path
         if path == "/api/chat/upload":

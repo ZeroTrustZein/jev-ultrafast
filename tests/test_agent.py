@@ -484,3 +484,16 @@ def test_endless_waits_on_unchanged_page_stop_the_run(runner):
         runner.state["decision"] = decision("wait")
         runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     assert runner.state["status"] == "blocked"
+
+
+def test_confirmation_checkbox_is_not_gated_but_submit_button_is(runner):
+    p = page()
+    p["actions"][2] = {"id": "e3", "kind": "click", "label": "Confirm information is accurate", "role": "checkbox",
+                       "value": "on", "node": 20}
+    p["fingerprint"] = fingerprint(p)
+    runner.state["page"] = p
+    runner.state["decision"] = {**decision("e3"), "operation": "CLICK", "probabilities": {"e3": 1.0}}
+    runner.approve = Mock(return_value=False)
+    runner.command("act", {"fingerprint": p["fingerprint"]})
+    runner.approve.assert_not_called()
+    assert runner.state["browser"].act.called

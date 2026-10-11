@@ -187,7 +187,11 @@ class Agent:
             if action["kind"] == "upload":
                 text, helper = self.pick_file(action, page)
                 state["text_calls"].append({**helper, "field": action["label"], "value": Path(text).name})
-            if self.approve and action["kind"] in {"click", "select", "coords"} and SENSITIVE.search(action["label"]):
+            # Ticking a checkbox/radio only changes form state; the irreversible step is the button that sends it.
+            gated = action.get("role") not in {"checkbox", "radio", "switch"}
+            if self.approve and gated and action["kind"] in {"click", "select", "coords"} and SENSITIVE.search(
+                action["label"]
+            ):
                 if not self.approve(action):
                     state["status"] = "blocked"
                     state["denied"] = action["label"]

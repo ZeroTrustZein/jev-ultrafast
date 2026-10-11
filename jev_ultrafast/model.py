@@ -259,7 +259,11 @@ Return a JSON object:
   "text": "text string if TYPE_TEXT",
   "reason": "one sentence explaining the choice"
 }
-Prefer choosing target from the table. Use CLICK_COORDS only for visual controls (canvas, map, icon)."""
+RULES:
+- Prefer choosing target from the table. Use CLICK_COORDS only for visual controls (canvas, map, icon).
+- Never choose WAIT on an idle page. Recent WAIT actions are not loading. Prefer a useful visible control over WAIT.
+- Submit populated search fields: if a search box has a value and Search/Submit is visible, CLICK it.
+- Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE."""
 
 
 def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
@@ -270,11 +274,15 @@ def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
     model = os.environ.get("TEXT_MODEL", "claude-odysseus")
 
     elements, targets, controls = action_space(page["actions"])
-    elements_text = "\n".join(
-        f"[{e['index']}] {e.get('role', '')} \"{e['label']}\" value={e.get('value', '')!r} "
-        f"ops={','.join(e.get('operations', []))}"
-        for e in elements[:120]
-    )
+    lines = []
+    for e in elements[:120]:
+        lines.append(
+            f"[{e['index']}] {e.get('role', '')} \"{e['label']}\" value={e.get('value', '')!r} "
+            f"ops={','.join(e.get('operations', []))}"
+        )
+        for opt in e.get("options", []):
+            lines.append(f"  [{opt['index']}] option \"{opt['label']}\"")
+    elements_text = "\n".join(lines)
 
     user_text = f"""GOAL: {goal}
 TRIGGER: {reason}
@@ -311,16 +319,31 @@ ELEMENT TABLE:
     choice = None
     if op == "CLICK_COORDS":
         choice = "CLICK_COORDS"
-    elif op in targets and target in targets[op]:
-        choice = targets[op][target]["id"]
-    elif op in controls:
-        choice = controls[op]["id"]
-    elif op.lower() in [a["id"] for a in page.get("actions", [])]:
-        choice = op.lower()
-    elif op in {"DONE", "BLOCKED"}:
-        choice = op
-    else:
-        choice = "wait" if any(a["id"] == "wait" for a in page.get("actions", [])) else op
+    elif op in targets:
+        act = targets[op].get(target)
+        if not act:
+            act = next((a for a in targets[op].values() if a["id"].lower() == target.lower()), None)
+        if not act:
+            act = next((a for a in targets[op].values() if a["label"].lower().startswith(target.lower())), None)
+        if act:
+            choice = act["id"]
+
+    if not choice:
+        if op in controls:
+            choice = controls[op]["id"]
+        elif op.lower() in [a["id"] for a in page.get("actions", [])]:
+            choice = op.lower()
+        elif op in {"DONE", "BLOCKED"}:
+            choice = op
+        elif op == "WAIT":
+            choice = "wait"
+        else:
+            matched = next(
+                (a for a in page.get("actions", []) if a["id"].lower() == target.lower()),
+                None,
+            )
+            has_wait = any(a["id"] == "wait" for a in page.get("actions", []))
+            choice = matched["id"] if matched else ("wait" if has_wait else op)
 
     return {
         "choice": choice,

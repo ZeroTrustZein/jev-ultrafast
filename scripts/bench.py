@@ -51,7 +51,8 @@ parser.add_argument("--max-actions", type=int, default=25)
 args = parser.parse_args()
 url, goal, check = TASKS[args.task]
 backend = (
-    os.environ.get("LOCAL_MODEL", "qwen3:4b-instruct") if os.environ.get("JEV_BACKEND") == "local"
+    os.environ.get("LOCAL_MODEL", "qwen3:4b-instruct")
+    if os.environ.get("JEV_BACKEND") == "local"
     else os.environ.get("TYPESAFE_BASE_URL", "jev")
 )
 

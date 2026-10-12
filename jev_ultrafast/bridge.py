@@ -103,13 +103,15 @@ class AssistBridge:
             for p in sorted(HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
                 try:
                     data = json.loads(p.read_text(encoding="utf-8"))
-                    sessions.append({
-                        "id": data.get("id", p.stem),
-                        "title": data.get("title", "Untitled"),
-                        "updated_at": data.get("updated_at", ""),
-                        "message_count": len(data.get("messages", [])),
-                        "active": (data.get("id") == self.session_id),
-                    })
+                    sessions.append(
+                        {
+                            "id": data.get("id", p.stem),
+                            "title": data.get("title", "Untitled"),
+                            "updated_at": data.get("updated_at", ""),
+                            "message_count": len(data.get("messages", [])),
+                            "active": (data.get("id") == self.session_id),
+                        }
+                    )
                 except Exception:
                     continue
             return sessions
@@ -188,6 +190,7 @@ class AssistBridge:
             try:
                 # Pre-warm local server & relay concurrently while planner thinks
                 import re
+
                 from . import relay
                 from .planner import ensure_local_server
 

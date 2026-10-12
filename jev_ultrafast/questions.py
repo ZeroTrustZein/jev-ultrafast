@@ -22,7 +22,10 @@ a target for that operation; another question decides which operation to execute
 a field that already contains the requested value. Choose only an offered element index."""
 
 TEXT_VALUE = """Return a JSON object with exactly one key, text: the exact string to enter in the selected field.
-Infer the value ONLY from the original goal, user profile facts, or the documents.
+Infer the value from the original goal, user profile facts, or the documents.
+If the field is a multi-line document or wikitext editor with existing content,
+and the goal asks to add or insert content, return the complete updated text with the change
+properly inserted in the right section or alphabetical position.
 CRITICAL: Never invent personal information (first name, family name / surname, date of birth, passport/ID number,
 address, postal code, phone, email, nationality). If the field asks for ANY personal or applicant detail and it is
 NOT already explicitly stated in the goal, profile, or documents, you MUST return {"text": null}. The agent will pause

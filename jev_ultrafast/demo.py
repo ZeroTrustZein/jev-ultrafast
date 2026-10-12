@@ -166,10 +166,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, json.dumps({"status": "reset"}))
             except Exception as exc:
                 return self.send(400, json.dumps({"error": str(exc)}))
-        if (
-            self.headers.get("X-Demo-Token") != TOKEN
-            or self.headers.get("Origin") not in (None, ORIGIN)
-        ):
+        if self.headers.get("X-Demo-Token") != TOKEN or self.headers.get("Origin") not in (None, ORIGIN):
             return self.send(403, json.dumps({"error": "Local demo requests only"}))
         if not LOCK.acquire(blocking=False):
             return self.send(409, json.dumps({"error": "A browser step is already running"}))

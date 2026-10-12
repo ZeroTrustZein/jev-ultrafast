@@ -44,9 +44,14 @@ for line in open(args.tasks, encoding="utf-8"):
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     row = {
-        "id": task_id, **task, "status": state["status"] if state else "error", "error": error,
-        "decisions": len(state["decisions"]) if state else 0, "actions": len(state["history"]) if state else 0,
-        "ms": state["elapsed_ms"] if state else 0, "final_url": state["page"]["url"] if state else None,
+        "id": task_id,
+        **task,
+        "status": state["status"] if state else "error",
+        "error": error,
+        "decisions": len(state["decisions"]) if state else 0,
+        "actions": len(state["history"]) if state else 0,
+        "ms": state["elapsed_ms"] if state else 0,
+        "final_url": state["page"]["url"] if state else None,
         "steps": [h["action"] + (f"={h['text']!r}" if h["text"] else "") for h in state["history"]] if state else [],
     }
     with runs.open("a", encoding="utf-8") as f:

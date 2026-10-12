@@ -115,10 +115,18 @@ def test_click_cannot_consume_a_text_target(monkeypatch):
 
 def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch):
     p = page()
-    p["actions"].insert(0, {
-        "id": "toggle", "kind": "click", "label": "Free cancellation", "node": 30,
-        "role": "checkbox", "checked": "true", "selected": False,
-    })
+    p["actions"].insert(
+        0,
+        {
+            "id": "toggle",
+            "kind": "click",
+            "label": "Free cancellation",
+            "node": 30,
+            "role": "checkbox",
+            "checked": "true",
+            "selected": False,
+        },
+    )
 
     def post(_url, _key, body):
         questions = body["questions"]
@@ -261,9 +269,18 @@ def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, r
     cdp = Mock(return_value=response)
     monkeypatch.setattr(browser, "cdp", cdp)
     with pytest.raises(RuntimeError, match="Dropdown execution"):
-        browser_operation({"operation": "act", "session": "test", "action": {
-            "id": "e1", "kind": "select", "node": 1, "value": "Design",
-        }})
+        browser_operation(
+            {
+                "operation": "act",
+                "session": "test",
+                "action": {
+                    "id": "e1",
+                    "kind": "select",
+                    "node": 1,
+                    "value": "Design",
+                },
+            }
+        )
     assert cdp.call_count == 1
 
 
@@ -343,7 +360,7 @@ def test_local_backend_returns_typesafe_shape_through_choose(monkeypatch):
     assert "target" not in branches["WAIT"] and "target" not in branches["DONE"]
     assert d["choice"] == "e3" and d["operation"] == "CLICK" and d["target"] == "2"
     # Confidence ignores forced JSON syntax (-5.0 per char) and scores only the chosen values.
-    assert abs(d["confidence"] - 2.718281828 ** -0.6) < 1e-6
+    assert abs(d["confidence"] - 2.718281828**-0.6) < 1e-6
 
 
 def test_local_backend_rejects_target_outside_the_operation(monkeypatch):
@@ -357,8 +374,14 @@ def test_local_backend_rejects_target_outside_the_operation(monkeypatch):
 
 def submit_page():
     p = page()
-    p["actions"][2] = {"id": "e3", "kind": "click", "label": "Submit application", "role": "button", "value": "",
-                       "node": 20}
+    p["actions"][2] = {
+        "id": "e3",
+        "kind": "click",
+        "label": "Submit application",
+        "role": "button",
+        "value": "",
+        "node": 20,
+    }
     p["fingerprint"] = fingerprint(p)
     return p
 
@@ -388,8 +411,14 @@ def test_planner_never_verifies_a_blocked_run(monkeypatch):
     from jev_ultrafast import planner
 
     asked = []
-    monkeypatch.setattr(planner, "ask", lambda system, _content: asked.append(system) or {
-        "url": "https://example.test/", "goal": "Find a book", "profile": {}, "done": True, "missing": ""})
+    monkeypatch.setattr(
+        planner,
+        "ask",
+        lambda system, _content: (
+            asked.append(system)
+            or {"url": "https://example.test/", "goal": "Find a book", "profile": {}, "done": True, "missing": ""}
+        ),
+    )
     fake = Mock(state={"status": "blocked", "page": page()}, snapshot=Mock(return_value={"page": page()}))
     fake.__enter__ = Mock(return_value=fake)
     fake.__exit__ = Mock(return_value=False)
@@ -436,6 +465,7 @@ def test_pdf_document_extraction(tmp_path):
 
 def test_browser_finder_discovers_chrome_or_brave():
     from jev_ultrafast.browser import find_browser
+
     exe, kind = find_browser()
     assert exe is not None
     assert kind in ("chrome", "brave")
@@ -444,22 +474,40 @@ def test_browser_finder_discovers_chrome_or_brave():
 def test_gear2_triggers_on_low_confidence(runner, monkeypatch):
     monkeypatch.setenv("GEAR2", "1")
     monkeypatch.setenv("GEAR2_CONFIDENCE_THRESHOLD", "0.7")
-    monkeypatch.setattr(loop, "choose", lambda *_: {
-        "choice": "e1", "operation": "TYPE_TEXT", "target": "1", "confidence": 0.5,
-        "probabilities": {"e1": 1.0}, "latency_ms": 10, "usage": {}
-    })
+    monkeypatch.setattr(
+        loop,
+        "choose",
+        lambda *_: {
+            "choice": "e1",
+            "operation": "TYPE_TEXT",
+            "target": "1",
+            "confidence": 0.5,
+            "probabilities": {"e1": 1.0},
+            "latency_ms": 10,
+            "usage": {},
+        },
+    )
     runner.state["browser"].call.return_value = {"data": "fake_jpeg_b64"}
-    
+
     vision_called = []
+
     def mock_vision(page, goal, history, screenshot, reason):
         vision_called.append((reason, screenshot))
         return {
-            "choice": "e3", "operation": "CLICK", "target": "2", "confidence": 1.0,
-            "probabilities": {"e3": 1.0}, "latency_ms": 50, "gear": 2, "model": "mock_vlm", "usage": {}
+            "choice": "e3",
+            "operation": "CLICK",
+            "target": "2",
+            "confidence": 1.0,
+            "probabilities": {"e3": 1.0},
+            "latency_ms": 50,
+            "gear": 2,
+            "model": "mock_vlm",
+            "usage": {},
         }
+
     monkeypatch.setattr(loop, "choose_vision", mock_vision)
     runner.command("predict")
-    
+
     assert len(vision_called) == 1
     assert vision_called[0][0] == "low confidence"
     assert runner.state["decision"]["gear"] == 2
@@ -468,9 +516,15 @@ def test_gear2_triggers_on_low_confidence(runner, monkeypatch):
 
 def test_gear2_click_coords_dispatches_mouse_event(runner):
     runner.state["decision"] = {
-        "choice": "CLICK_COORDS", "operation": "CLICK_COORDS", "x": 150, "y": 250,
-        "confidence": 1.0, "probabilities": {"CLICK_COORDS": 1.0}, "latency_ms": 10,
-        "gear": 2, "usage": {}
+        "choice": "CLICK_COORDS",
+        "operation": "CLICK_COORDS",
+        "x": 150,
+        "y": 250,
+        "confidence": 1.0,
+        "probabilities": {"CLICK_COORDS": 1.0},
+        "latency_ms": 10,
+        "gear": 2,
+        "usage": {},
     }
     runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     act_arg = runner.state["browser"].act.call_args.args[0]
@@ -488,8 +542,14 @@ def test_endless_waits_on_unchanged_page_stop_the_run(runner):
 
 def test_confirmation_checkbox_is_not_gated_but_submit_button_is(runner):
     p = page()
-    p["actions"][2] = {"id": "e3", "kind": "click", "label": "Confirm information is accurate", "role": "checkbox",
-                       "value": "on", "node": 20}
+    p["actions"][2] = {
+        "id": "e3",
+        "kind": "click",
+        "label": "Confirm information is accurate",
+        "role": "checkbox",
+        "value": "on",
+        "node": 20,
+    }
     p["fingerprint"] = fingerprint(p)
     runner.state["page"] = p
     runner.state["decision"] = {**decision("e3"), "operation": "CLICK", "probabilities": {"e3": 1.0}}

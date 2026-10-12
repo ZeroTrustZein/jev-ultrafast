@@ -8,6 +8,7 @@ sys.stdout.reconfigure(line_buffering=True)
 
 user_interactions = []
 
+
 def interactive_dialog(prompt):
     user_interactions.append(prompt)
     print(f"\n[INTERACTIVE USER QUESTION]: {prompt}", flush=True)
@@ -19,6 +20,7 @@ def interactive_dialog(prompt):
         return "n"
     print("  -> User provided: Leipzig University Student", flush=True)
     return "Leipzig University Student"
+
 
 goal = (
     "i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me "

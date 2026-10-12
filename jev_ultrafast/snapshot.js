@@ -40,7 +40,8 @@
     return referenced || e.getAttribute('aria-label') ||
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
-      (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
+      (e.tagName==='TEXTAREA' ? (e.getAttribute('placeholder') || e.getAttribute('title') || e.id || e.name || 'Wikitext editor') : '') ||
+      (e.tagName==='INPUT' || e.tagName==='TEXTAREA' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
         n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
@@ -87,8 +88,12 @@
       continue;
     }
     if (!visible(e)) continue;
-    const r=cache.box(e), x=r.x+r.w/2, y=r.y+r.h/2, rname=role(e);
-    if (!rname || r.w<=0 || r.h<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
+    const r=cache.box(e);
+    const vl=Math.max(r.x, 0), vr=Math.min(r.x+r.w, innerWidth);
+    const vt=Math.max(r.y, 0), vb=Math.min(r.y+r.h, innerHeight);
+    const rname=role(e);
+    if (!rname || vr<=vl || vb<=vt) continue;
+    const x=(vl+vr)/2, y=(vt+vb)/2;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.w,h:r.h}};

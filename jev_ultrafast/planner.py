@@ -43,14 +43,20 @@ VERIFY = """You check whether a browser agent finished its goal. Given the goal 
 
 
 def ask(system, content):
-    base = (os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")).rstrip("/")
+    base = (
+        os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")
+    ).rstrip("/")
     key = os.environ.get("PLANNER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY", "local")
     model = os.environ.get("PLANNER_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
-    result = post_json(base + "/chat/completions", key, {
-        "model": model,
-        "response_format": {"type": "json_object"},
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
-    })
+    result = post_json(
+        base + "/chat/completions",
+        key,
+        {
+            "model": model,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
+        },
+    )
     return json_content(result)
 
 
@@ -61,8 +67,10 @@ def documents(paths):
         kind = mimetypes.guess_type(path.name)[0] or ""
         if kind.startswith("image/"):
             data = base64.b64encode(path.read_bytes()).decode()
-            parts += [{"type": "text", "text": f"Document {path.name}:"},
-                      {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{data}"}}]
+            parts += [
+                {"type": "text", "text": f"Document {path.name}:"},
+                {"type": "image_url", "image_url": {"url": f"data:{kind};base64,{data}"}},
+            ]
         elif path.suffix.lower() == ".pdf":
             from pypdf import PdfReader
 
@@ -78,7 +86,7 @@ def documents(paths):
                         b64 = base64.b64encode(img.data).decode()
                         mime = "image/jpeg" if "jp" in img.name.lower() else "image/png"
                         parts += [
-                            {"type": "text", "text": f"Document {path.name} (page {p_idx+1} scan):"},
+                            {"type": "text", "text": f"Document {path.name} (page {p_idx + 1} scan):"},
                             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                         ]
                         found = True
@@ -160,8 +168,13 @@ def ensure_local_server(port=8791):
             model_dir = laya_dir / "laya-browser"
         if server_script.exists():
             import subprocess
-            subprocess.Popen([str(py), str(server_script), "serve", "--port", str(port), "--model", str(model_dir)],
-                             cwd=str(laya_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            subprocess.Popen(
+                [str(py), str(server_script), "serve", "--port", str(port), "--model", str(model_dir)],
+                cwd=str(laya_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             for _ in range(30):
                 time.sleep(0.2)
                 try:

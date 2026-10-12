@@ -38,16 +38,18 @@ def post_json(url, key, body):
         if choice.get("finish_reason") == "tool_calls" and choice.get("message", {}).get("tool_calls"):
             msg = choice["message"]
             tool_results = res.get("tool_results") or []
-            tool_outputs = {tr.get("tool_call_id"): tr.get("output", "{\"success\":true}") for tr in tool_results}
+            tool_outputs = {tr.get("tool_call_id"): tr.get("output", '{"success":true}') for tr in tool_results}
             messages = list(current_body.get("messages", []))
             messages.append(msg)
             for tc in msg.get("tool_calls", []):
                 t_id = tc.get("id")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": t_id,
-                    "content": tool_outputs.get(t_id, "{\"success\":true}"),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": t_id,
+                        "content": tool_outputs.get(t_id, '{"success":true}'),
+                    }
+                )
             current_body["messages"] = messages
             continue
         return res
@@ -248,12 +250,14 @@ def field_text(context):
     elif os.environ.get("TEXT_MODEL_REASONING") == "none":
         reasoning = {"reasoning_effort": "none"}
     started = time.perf_counter()
+    val_len = len(str(context.get("field", {}).get("value", "")))
+    max_tokens = 4096 if val_len > 150 else 256
     result = post_json(
         base + "/chat/completions",
         key,
         {
             "model": model,
-            "max_tokens": 120,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
             **reasoning,
             "messages": [
@@ -272,7 +276,7 @@ def field_text(context):
             raise MissingValue(context["field"]["label"])
         if isinstance(value, str) and value.lower().strip() in PLACEHOLDERS:
             raise MissingValue(context["field"]["label"])
-        if set(output) != {"text"} or not isinstance(value, str) or len(value) > 2000:
+        if set(output) != {"text"} or not isinstance(value, str) or len(value) > 100000:
             raise ValueError()
     except MissingValue:
         raise
@@ -298,7 +302,8 @@ Return a JSON object:
 }
 RULES:
 - Prefer choosing target from the table. Use CLICK_COORDS only for visual controls (canvas, map, icon).
-- SEAT MAPS & VISUAL PICKERS: For seating charts (cinema, airline, theater), interactive maps, or canvas widgets without table indices, choose CLICK_COORDS with the exact (x, y) coordinates of the seat/control in CSS pixels. Select central/middle seats.
+- SEAT MAPS: For seating charts, maps, or canvas widgets without table indices,
+  choose CLICK_COORDS with the exact (x, y) coordinates of the seat/control in CSS pixels. Select central seats.
 - Never choose WAIT on an idle page. Recent WAIT actions are not loading. Prefer a useful visible control over WAIT.
 - Submit populated search fields: if a search box has a value and Search/Submit is visible, CLICK it.
 - Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE."""
@@ -315,19 +320,19 @@ def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
     lines = []
     for e in elements[:120]:
         lines.append(
-            f"[{e['index']}] {e.get('role', '')} \"{e['label']}\" value={e.get('value', '')!r} "
+            f'[{e["index"]}] {e.get("role", "")} "{e["label"]}" value={e.get("value", "")!r} '
             f"ops={','.join(e.get('operations', []))}"
         )
         for opt in e.get("options", []):
-            lines.append(f"  [{opt['index']}] option \"{opt['label']}\"")
+            lines.append(f'  [{opt["index"]}] option "{opt["label"]}"')
     elements_text = "\n".join(lines)
 
     user_text = f"""GOAL: {goal}
 TRIGGER: {reason}
-VIEWPORT: width={page.get('w', 1200)}, height={page.get('h', 800)} (ensure CLICK_COORDS x, y are within this range)
-RECENT ACTIONS: {json.dumps([{k: h.get(k) for k in ('action', 'text', 'page_changed')} for h in history[-5:]])}
-PAGE URL: {page.get('url', '')}
-PAGE TITLE: {page.get('title', '')}
+VIEWPORT: width={page.get("w", 1200)}, height={page.get("h", 800)} (ensure CLICK_COORDS x, y are within this range)
+RECENT ACTIONS: {json.dumps([{k: h.get(k) for k in ("action", "text", "page_changed")} for h in history[-5:]])}
+PAGE URL: {page.get("url", "")}
+PAGE TITLE: {page.get("title", "")}
 ELEMENT TABLE:
 {elements_text}
 """

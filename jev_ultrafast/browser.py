@@ -18,7 +18,11 @@ READ_STATE = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
 DISMISS_COOKIES_JS = """(() => {
-  const re = /^(ich lehne ab|alle ablehnen|nur notwendige|nur essenzielle|cookies ablehnen|reject all|decline all|reject|decline|disagree|refuse|deny|schließen|close)$/i;
+  const re = new RegExp(
+    "^(ich lehne ab|alle ablehnen|nur notwendige|nur essenzielle|cookies ablehnen|"
+    + "reject all|decline all|reject|decline|disagree|refuse|deny|schließen|close)$",
+    "i"
+  );
   const buttons = [...document.querySelectorAll('button, a, [role="button"]')];
   for (const b of buttons) {
     if (re.test(b.innerText?.trim() || "") && b.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) {
@@ -187,7 +191,9 @@ class Browser:
                         else requestAnimationFrame(ready);
                       };
                       requestAnimationFrame(ready);
-                    }))(""" + json.dumps(action) + ")",
+                    }))("""
+                    + json.dumps(action)
+                    + ")",
                     awaitPromise=True,
                     returnByValue=True,
                 )
@@ -202,8 +208,12 @@ class Browser:
         for attempt in range(25):
             try:
                 return browser_operation(
-                    {"operation": "observe", "session": self.session, "screenshot": screenshot,
-                     "upload": self.allow_upload}
+                    {
+                        "operation": "observe",
+                        "session": self.session,
+                        "screenshot": screenshot,
+                        "upload": self.allow_upload,
+                    }
                 )
             except StalePage:
                 if attempt == 24:
@@ -292,18 +302,21 @@ def browser_operation(request):
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
-            target = evaluate("""(action => {
+            target = evaluate(
+                """(action => {
               const e=window.__jevFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-              const r=window.__jevFast.box(e), x=r.x+r.w/2, y=r.y+r.h/2;
-              if (!r.w || !r.h || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              // Hit-test inside the element's own shadow root or frame document, at its local coordinates.
-              const local=e.getBoundingClientRect(), root=e.getRootNode();
-              const hit=(root.elementFromPoint ? root : e.ownerDocument)
-                .elementFromPoint(local.x+local.width/2, local.y+local.height/2);
-              if (!e.contains(hit)) return null;
+              const r=window.__jevFast.box(e);
+              const vl=Math.max(r.x,0), vr=Math.min(r.x+r.w,innerWidth);
+              const vt=Math.max(r.y,0), vb=Math.min(r.y+r.h,innerHeight);
+              if (vr<=vl || vb<=vt) return null;
+              const x=(vl+vr)/2, y=(vt+vb)/2;
+              // Hit-test inside the element's own shadow root or frame document at visible coordinates.
+              const root=e.getRootNode();
+              const hit=(root.elementFromPoint ? root : e.ownerDocument).elementFromPoint(x, y);
+              if (hit && !e.contains(hit) && !hit.contains(e)) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
                     !o.disabled && !o.closest('optgroup[disabled]'))) return null;
@@ -312,7 +325,10 @@ def browser_operation(request):
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
               return {x,y};
-            })(""" + json.dumps(action) + ")")
+            })("""
+                + json.dumps(action)
+                + ")"
+            )
             if target is None:
                 if kind == "select":
                     raise RuntimeError("Dropdown execution was not confirmed; inspect before retrying.")

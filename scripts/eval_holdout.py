@@ -22,12 +22,24 @@ base = os.environ["TEXT_MODEL_BASE_URL"].rstrip("/")
 
 
 def judge(goal, page):
-    result = post_json(base + "/chat/completions", os.environ["TEXT_MODEL_API_KEY"], {
-        "model": os.environ.get("JUDGE_MODEL", os.environ["TEXT_MODEL"]),
-        "response_format": {"type": "json_object"},
-        "messages": [{"role": "system", "content": VERIFY}, {"role": "user", "content": json.dumps(
-            {"goal": goal, "url": page["url"], "title": page["title"], "page": page["text"]}, ensure_ascii=False)}],
-    })
+    result = post_json(
+        base + "/chat/completions",
+        os.environ["TEXT_MODEL_API_KEY"],
+        {
+            "model": os.environ.get("JUDGE_MODEL", os.environ["TEXT_MODEL"]),
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": VERIFY},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"goal": goal, "url": page["url"], "title": page["title"], "page": page["text"]},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        },
+    )
     return json_content(result)
 
 
@@ -50,10 +62,15 @@ for line in open(args.tasks, encoding="utf-8"):
     except Exception as exc:
         error = error or f"{type(exc).__name__}: {exc}"
     row = {
-        "arm": args.arm, **task, "status": state["status"] if state else "error", "error": error,
-        "judge_done": bool(verdict.get("done")), "missing": verdict.get("missing"),
+        "arm": args.arm,
+        **task,
+        "status": state["status"] if state else "error",
+        "error": error,
+        "judge_done": bool(verdict.get("done")),
+        "missing": verdict.get("missing"),
         "passed": bool(state) and state["status"] == "done" and not error and bool(verdict.get("done")),
-        "ms": state["elapsed_ms"] if state else 0, "decisions": len(state["decisions"]) if state else 0,
+        "ms": state["elapsed_ms"] if state else 0,
+        "decisions": len(state["decisions"]) if state else 0,
         "steps": [h["action"] for h in state["history"]] if state else [],
     }
     with open(args.out, "a", encoding="utf-8") as f:

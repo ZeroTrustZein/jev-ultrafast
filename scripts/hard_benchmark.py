@@ -38,6 +38,7 @@ class Tab:
                         await ws.send(json.dumps({"id": m["id"], "result": res}))
                     except Exception as exc:
                         await ws.send(json.dumps({"id": m["id"], "error": str(exc)}))
+
         asyncio.run(main())
 
     def js(self, expression):
@@ -88,8 +89,14 @@ def run_chat(message, url=None, answers=None, timeout=120):
             reply = None
             if last.get("is_approval"):
                 reply = answers.get("approve", "no")
-            elif s["status"] == "waiting_user" or last.get("missing_field") or (
-                s["status"] == "idle" and ("?" in text or "what" in text.lower() or "need" in text.lower()) and "completed" not in text.lower()
+            elif (
+                s["status"] == "waiting_user"
+                or last.get("missing_field")
+                or (
+                    s["status"] == "idle"
+                    and ("?" in text or "what" in text.lower() or "need" in text.lower())
+                    and "completed" not in text.lower()
+                )
             ):
                 reply = next((v for k, v in answers.items() if k != "approve" and k.lower() in text.lower()), None)
             if reply is not None:
@@ -108,8 +115,10 @@ def run_chat(message, url=None, answers=None, timeout=120):
 
 # ---- 5 Hard Tasks ----
 
+
 def task_1_multi_filter():
     """Task 1: Search Lisbon + Design category + Free cancellation -> Casa Flora."""
+
     def check(t, s, p):
         hash_val = t.js("location.hash") or ""
         body_text = t.js("document.body.innerText") or ""
@@ -128,6 +137,7 @@ def task_1_multi_filter():
 
 def task_2_shadow_and_iframe():
     """Task 2: Simultaneously penetrate open shadowRoot and nested iframe without touching other fields."""
+
     def check(t, s, p):
         street = t.js("document.getElementById('address-container').shadowRoot.getElementById('street').value") or ""
         agree = t.js("document.getElementById('decl-frame').contentDocument.getElementById('agree').checked")
@@ -139,7 +149,8 @@ def task_2_shadow_and_iframe():
         "2. Shadow DOM & Nested Iframe Simultaneous Penetration",
         APP,
         None,
-        "Fill ONLY my residential street address to 45 Friedrichstrasse and tick the declaration confirmation checkbox in the frame. Leave name and email untouched, do not submit.",
+        "Fill ONLY my residential street address to 45 Friedrichstrasse and tick the declaration "
+        "confirmation checkbox in the frame. Leave name and email untouched, do not submit.",
         {"name": "Kai Student"},
         check,
     )
@@ -147,13 +158,17 @@ def task_2_shadow_and_iframe():
 
 def task_3_doc_ingest_and_upload():
     """Task 3: Ingest multiple attachments, extract name/email, select category, upload file."""
+
     def setup_attachments():
         passport = b"PASSPORT\nSurname: ROSTOVA\nGiven Names: ELENA\nDate of Birth: 15 APR 2001\nNo: LR998877\n"
         profile = b"Email: elena@example.com\n"
         for name, data in (("passport.txt", passport), ("profile.txt", profile)):
             post("/api/chat/upload", data=data, headers={"Origin": "chrome-extension://benchmark", "X-File-Name": name})
-        post("/api/chat/upload", data=Path("artifacts/passport_scan.pdf").read_bytes(),
-             headers={"Origin": "chrome-extension://benchmark", "X-File-Name": "passport_scan.pdf"})
+        post(
+            "/api/chat/upload",
+            data=Path("artifacts/passport_scan.pdf").read_bytes(),
+            headers={"Origin": "chrome-extension://benchmark", "X-File-Name": "passport_scan.pdf"},
+        )
 
     def check(t, s, p):
         name = t.js("document.getElementById('fullname').value") or ""
@@ -167,7 +182,10 @@ def task_3_doc_ingest_and_upload():
         "3. Document Ingestion, Dropdown Category & Native File Upload",
         APP,
         setup_attachments,
-        "From my attached passport and profile, fill my full name, email, select Tourist Visa category, and attach my passport scan file. Do not submit.",
+        (
+            "From my attached passport and profile, fill my full name, email, select Tourist Visa category, "
+            "and attach my passport scan file. Do not submit."
+        ),
         {},
         check,
     )
@@ -175,6 +193,7 @@ def task_3_doc_ingest_and_upload():
 
 def task_4_multiturn_correction():
     """Task 4: Multi-turn memory with mid-flight user correction."""
+
     def check(t, s, p):
         name = t.js("document.getElementById('fullname').value") or ""
         email = t.js("document.getElementById('email').value") or ""
@@ -194,6 +213,7 @@ def task_4_multiturn_correction():
 
 def task_5_live_wikipedia_search():
     """Task 5: Live web search & article navigation on Wikipedia."""
+
     def check(t, s, p):
         href = t.js("location.href") or ""
         ok = "Ada_Lovelace" in href
@@ -209,8 +229,13 @@ def task_5_live_wikipedia_search():
     )
 
 
-TASKS = [task_1_multi_filter, task_2_shadow_and_iframe, task_3_doc_ingest_and_upload,
-         task_4_multiturn_correction, task_5_live_wikipedia_search]
+TASKS = [
+    task_1_multi_filter,
+    task_2_shadow_and_iframe,
+    task_3_doc_ingest_and_upload,
+    task_4_multiturn_correction,
+    task_5_live_wikipedia_search,
+]
 
 
 def main():
@@ -243,7 +268,11 @@ def main():
             if setup_fn == "multiturn_correction":
                 # Turn 1: establish initial fact
                 print("  Turn 1: Setting initial fact...")
-                run_chat("Remember my name is Maya Lindqvist and my email is old@example.com. Just say OK, don't do anything yet.", None)
+                run_chat(
+                    "Remember my name is Maya Lindqvist and my email is old@example.com. "
+                    "Just say OK, don't do anything yet.",
+                    None,
+                )
                 # Turn 2: correct email and apply to form
                 print("  Turn 2: Overriding email and filling form...")
                 s, prompts, secs = run_chat(

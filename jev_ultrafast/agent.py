@@ -103,9 +103,8 @@ class Agent:
                 os.environ.get("GEAR2_CONFIDENCE_THRESHOLD", "0.65")
             )
             is_blocked = state["decision"].get("choice") == "BLOCKED"
-            is_looping = (
-                len(state["history"]) >= 2
-                and all(h.get("page_changed") is False and h.get("kind") != "wait" for h in state["history"][-2:])
+            is_looping = len(state["history"]) >= 2 and all(
+                h.get("page_changed") is False and h.get("kind") != "wait" for h in state["history"][-2:]
             )
             if gear2_on and state["decision"].get("gear") != 2 and (low_conf or is_blocked or is_looping):
                 trigger_reason = (
@@ -189,8 +188,11 @@ class Agent:
                 state["text_calls"].append({**helper, "field": action["label"], "value": Path(text).name})
             # Ticking a checkbox/radio only changes form state; the irreversible step is the button that sends it.
             gated = action.get("role") not in {"checkbox", "radio", "switch"}
-            if self.approve and gated and action["kind"] in {"click", "select", "coords"} and SENSITIVE.search(
-                action["label"]
+            if (
+                self.approve
+                and gated
+                and action["kind"] in {"click", "select", "coords"}
+                and SENSITIVE.search(action["label"])
             ):
                 if not self.approve(action):
                     state["status"] = "blocked"

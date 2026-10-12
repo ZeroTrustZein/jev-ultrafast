@@ -41,9 +41,9 @@ Return a JSON object:
 
 Guidelines:
 - If the user says 'do everything for me' or gives a goal, outline the plan, find the portal, and start filling.
-- Whenever the user asks to search, find, navigate, open, filter, or fill, action_required MUST be true and goal MUST be non-empty.
-- Search fields: when searching a term on a portal or site, instruct the agent to type the query AND click Search / Submit / Find stays to execute the search.
-- SHOWTIMES & RESERVATIONS: In German cinemas, English version is OV (Originalversion) or OmU. If the user asks for a specific timeframe (like 'weekend') but only another day (e.g. Monday) is scheduled, book the closest available showing rather than halting.
+- When asked to search, find, navigate, open, filter, or fill, action_required MUST be true and goal MUST be non-empty.
+- Search fields: instruct the agent to type the query AND click Search / Submit to execute the search.
+- SHOWTIMES: In German cinemas, English version is OV or OmU. If requested timeframe is unavailable, pick closest.
 - SCOPE: if the user names specific fields ("fill my email"), the goal must touch ONLY those fields and then stop.
   Write it as "Fill ONLY <fields>, leave every other field untouched, then stop." Never fill extra fields.
 - NEVER invent personal information. If not in the documents or message, ask the user directly in bullet points.
@@ -52,7 +52,9 @@ Guidelines:
 
 
 def chat_turn(conversation_history, profile, current_url=None, files=()):
-    base = (os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")).rstrip("/")
+    base = (
+        os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")
+    ).rstrip("/")
     key = os.environ.get("PLANNER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY", "local")
     model = os.environ.get("PLANNER_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
 
@@ -89,10 +91,10 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
     return json_content(result)
 
 
-SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent just reached the final page for the user's goal.
-Read the page title, URL, and visible page text to provide a concise, high-value summary of what was found or completed.
+SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent reached the final page for the user's goal.
+Read the page title, URL, and visible text to provide a concise, high-value summary of what was found or completed.
 Key instructions:
-- If showtimes, flights, or tickets were found: specify the theater/airline, exact date/time, and format (e.g. note that OV means English Original Version).
+- If showtimes or tickets found: specify theater, date/time, and format (note that OV means English Original Version).
 - If an application/form was processed: summarize the fields filled and the current status.
 - State the immediate next action available (e.g. 'Click ExpressTicket to select seats', or 'Form ready for review').
 Format as 2-4 clean markdown bullet points. Keep it under 100 words. No fluff."""
@@ -101,7 +103,9 @@ Format as 2-4 clean markdown bullet points. Keep it under 100 words. No fluff.""
 def synthesize_outcome(goal, page):
     if not page or not page.get("text"):
         return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
-    base = (os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")).rstrip("/")
+    base = (
+        os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")
+    ).rstrip("/")
     key = os.environ.get("PLANNER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY", "local")
     model = os.environ.get("PLANNER_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
 
@@ -130,4 +134,3 @@ def synthesize_outcome(goal, page):
         return content.strip()
     except Exception:
         return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
-

@@ -557,3 +557,183 @@ def test_confirmation_checkbox_is_not_gated_but_submit_button_is(runner):
     runner.command("act", {"fingerprint": p["fingerprint"]})
     runner.approve.assert_not_called()
     assert runner.state["browser"].act.called
+
+
+def test_chat_turn_prominently_displays_current_active_tab(monkeypatch):
+    from jev_ultrafast.chat_agent import chat_turn
+
+    calls = []
+
+    def mock_post(_url, _key, body):
+        calls.append(body)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "reply": "Opening editor and inserting architect Nazih Dergham.",
+                                "action_required": True,
+                                "start_url": "https://en.wikipedia.org/wiki/List_of_Lebanese_architects?action=edit",
+                                "goal": (
+                                    "Click editor, insert '* [[Nazih Dergham]] (born 1945)' into list, "
+                                    "click Show preview."
+                                ),
+                                "extracted_profile": {"architect": "Nazih Dergham"},
+                                "questions_for_user": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("PLANNER_API_KEY", "test-key")
+    monkeypatch.setattr("jev_ultrafast.chat_agent.post_json", mock_post)
+
+    msg = "CAN U ADD TO THIS TAB FORMATTED PROPERLY A NEW ARCHITECT : NAZIH DERGHAM BORN 1945"
+    history = [{"role": "user", "content": msg}]
+    current_url = "https://en.wikipedia.org/wiki/List_of_Lebanese_architects?action=edit"
+    res = chat_turn(history, {}, current_url=current_url)
+
+    assert res["action_required"] is True
+    assert len(calls) == 1
+    sent_messages = calls[0]["messages"]
+    system_prompt = sent_messages[0]["content"]
+    user_prompt = sent_messages[1]["content"][0]["text"]
+
+    # Verify system prompt has instructions for CURRENT ACTIVE TAB and PAGE EDITING
+    assert "CURRENT ACTIVE TAB: <url>" in system_prompt
+    assert "PAGE EDITING & INSERTING ENTRIES" in system_prompt
+    assert "NEVER claim the URL is missing" in system_prompt
+
+    # Verify user message explicitly and prominently features CURRENT ACTIVE TAB
+    assert f"CURRENT ACTIVE TAB: {current_url}" in user_prompt
+    assert "If the user refers to 'this tab', 'this page', 'here'" in user_prompt
+    assert "insert an entry" in user_prompt
+
+
+def test_chat_turn_handles_none_current_url_gracefully(monkeypatch):
+    from jev_ultrafast.chat_agent import chat_turn
+
+    calls = []
+
+    def mock_post(_url, _key, body):
+        calls.append(body)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "reply": "Which page would you like me to open?",
+                                "action_required": False,
+                                "start_url": None,
+                                "goal": "",
+                                "extracted_profile": {},
+                                "questions_for_user": ["Which URL or page should I edit?"],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("PLANNER_API_KEY", "test-key")
+    monkeypatch.setattr("jev_ultrafast.chat_agent.post_json", mock_post)
+
+    chat_turn([{"role": "user", "content": "hello"}], {}, current_url=None)
+    assert len(calls) == 1
+    user_prompt = calls[0]["messages"][1]["content"][0]["text"]
+    assert "CURRENT ACTIVE TAB: None (blank/new tab)" in user_prompt
+
+
+def test_bridge_fresh_session_and_reset(tmp_path, monkeypatch):
+    import jev_ultrafast.bridge as bridge_mod
+    from jev_ultrafast.bridge import AssistBridge
+
+    # Point HISTORY_DIR to temporary directory
+    history_dir = tmp_path / "history"
+    monkeypatch.setattr(bridge_mod, "HISTORY_DIR", history_dir)
+
+    # 1. Fresh bridge initialization starts with clean empty session
+    bridge = AssistBridge()
+    assert bridge.messages == []
+    assert bridge.status == "idle"
+    initial_id = bridge.session_id
+    assert initial_id.startswith("sess_")
+
+    # 2. Add message to bridge
+    bridge.messages.append({"id": 1, "role": "user", "content": "First conversation"})
+    bridge._save_session()
+    assert (history_dir / f"{initial_id}.json").exists()
+
+    # 3. New session starts completely clean
+    new_state = bridge.new_session()
+    assert new_state["messages"] == []
+    assert new_state["status"] == "idle"
+    assert new_state["id"] != initial_id
+    assert bridge.session_id != initial_id
+
+    # 4. Old session is archived and loadable from history
+    loaded_state = bridge.load_session(initial_id)
+    assert len(loaded_state["messages"]) == 1
+    assert loaded_state["messages"][0]["content"] == "First conversation"
+    assert bridge.session_id == initial_id
+
+    # 5. Reset again gives clean session
+    reset_state = bridge.reset()
+    assert reset_state["messages"] == []
+    assert bridge.messages == []
+
+
+def test_bridge_worker_generation_invalidation(tmp_path, monkeypatch):
+    import jev_ultrafast.bridge as bridge_mod
+    from jev_ultrafast.bridge import AssistBridge
+
+    history_dir = tmp_path / "history"
+    monkeypatch.setattr(bridge_mod, "HISTORY_DIR", history_dir)
+
+    bridge = AssistBridge()
+    initial_gen = bridge.generation
+
+    # Calling stop or new_session increments generation
+    bridge.stop()
+    assert bridge.generation == initial_gen + 1
+
+    bridge.new_session()
+    assert bridge.generation == initial_gen + 3
+
+
+def test_bridge_updates_current_url_from_explicit_message(tmp_path, monkeypatch):
+    import jev_ultrafast.bridge as bridge_mod
+    from jev_ultrafast.bridge import AssistBridge
+
+    history_dir = tmp_path / "history"
+    monkeypatch.setattr(bridge_mod, "HISTORY_DIR", history_dir)
+
+    bridge = AssistBridge()
+    bridge.current_url = "https://initial.example.com"
+
+    recorded = []
+
+    def mock_chat_turn(history, prof, current_url=None, files=()):
+        recorded.append(current_url)
+        return {"reply": "ok", "action_required": False, "goal": "", "questions_for_user": []}
+
+    monkeypatch.setattr("jev_ultrafast.bridge.chat_turn", mock_chat_turn)
+    monkeypatch.setattr("jev_ultrafast.planner.ensure_local_server", lambda: None)
+    monkeypatch.setattr("jev_ultrafast.relay.start", lambda: None)
+
+    explicit_url = "https://en.wikipedia.org/w/index.php?title=List_of_Lebanese_architects&action=edit"
+    bridge.send_message(f"{explicit_url} this page here")
+
+    if bridge.worker_thread:
+        bridge.worker_thread.join(timeout=2.0)
+
+    assert len(recorded) == 1
+    assert recorded[0] == explicit_url
+    assert bridge.current_url == explicit_url
+
+
+

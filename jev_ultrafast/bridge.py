@@ -53,7 +53,7 @@ class AssistBridge:
         self.msg_counter = 1
         self.session_id = f"sess_{int(time.time() * 1000)}"
         self.title = "New conversation"
-        self._load_latest_or_init()
+        self.generation = 0
 
     def _save_session(self):
         try:
@@ -119,12 +119,14 @@ class AssistBridge:
             return []
 
     def load_session(self, sess_id):
+        self._save_session()
         self.stop()
         p = HISTORY_DIR / f"{sess_id}.json"
         if not p.exists():
             raise ValueError(f"Session {sess_id} not found")
         data = json.loads(p.read_text(encoding="utf-8"))
         with self.lock:
+            self.generation += 1
             self.session_id = data.get("id", sess_id)
             self.title = data.get("title", "Conversation")
             self.messages = data.get("messages", [])
@@ -133,12 +135,15 @@ class AssistBridge:
             self.current_url = data.get("current_url")
             self.status = "idle"
             self.msg_counter = max([m.get("id", 0) for m in self.messages] + [0]) + 1
+            self.active_agent = None
+            self.user_input_response = None
         return self.get_state()
 
     def new_session(self):
         self._save_session()
         self.stop()
         with self.lock:
+            self.generation += 1
             self.session_id = f"sess_{int(time.time() * 1000)}"
             self.title = "New conversation"
             self.messages = []
@@ -147,6 +152,8 @@ class AssistBridge:
             self.current_url = None
             self.status = "idle"
             self.msg_counter = 1
+            self.active_agent = None
+            self.user_input_response = None
         return self.get_state()
 
     def add_file(self, name, data):
@@ -185,6 +192,9 @@ class AssistBridge:
             }
             self.msg_counter += 1
             self.messages.append(user_msg)
+            self.generation += 1
+            current_gen = self.generation
+            current_sess_id = self.session_id
 
         def worker():
             try:
@@ -199,10 +209,11 @@ class AssistBridge:
 
                 # 1. Ask conversational planner for response and next actions
                 with self.lock:
-                    if not self.current_url:
-                        url_match = re.search(r"https?://[^\s]+", text)
-                        if url_match:
-                            self.current_url = url_match.group(0)
+                    if self.generation != current_gen or self.session_id != current_sess_id:
+                        return
+                    url_match = re.search(r"https?://[^\s]+", text)
+                    if url_match:
+                        self.current_url = url_match.group(0)
                     history_for_llm = [{"role": m["role"], "content": m["content"]} for m in self.messages]
                     prof = dict(self.profile)
                     flist = list(self.files)
@@ -210,14 +221,22 @@ class AssistBridge:
 
                 plan = chat_turn(history_for_llm, prof, current_url=cur_url, files=flist)
 
+                with self.lock:
+                    if self.generation != current_gen or self.session_id != current_sess_id:
+                        return
+
                 # Update extracted profile facts and normalize synonyms (German/English)
                 if plan.get("extracted_profile"):
                     with self.lock:
+                        if self.generation != current_gen or self.session_id != current_sess_id:
+                            return
                         self.profile.update(plan["extracted_profile"])
                         normalize_profile_aliases(self.profile)
 
                 # Create assistant response message
                 with self.lock:
+                    if self.generation != current_gen or self.session_id != current_sess_id:
+                        return
                     asst_msg = {
                         "id": self.msg_counter,
                         "role": "assistant",
@@ -227,11 +246,13 @@ class AssistBridge:
                     }
                     self.msg_counter += 1
                     self.messages.append(asst_msg)
+                    self._save_session()
 
                 # 2. If the planner asked the user something, wait for the answer instead of driving blind.
                 if plan.get("questions_for_user"):
                     with self.lock:
-                        self.status = "idle"
+                        if self.generation == current_gen and self.session_id == current_sess_id:
+                            self.status = "idle"
                     return
                 # Act when the planner formed a goal, navigated to a start_url, or requested action.
                 goal = (plan.get("goal") or "").strip()
@@ -241,25 +262,26 @@ class AssistBridge:
                 should_act = action_required and bool(goal)
                 if should_act:
                     with self.lock:
+                        if self.generation != current_gen or self.session_id != current_sess_id:
+                            return
                         self.status = "running"
 
-                    from . import relay
-                    from .planner import ensure_local_server
-
                     ensure_local_server()
-                    # Drive the user's own tab through the extension. Never fall back to launching a separate
-                    # browser: if the extension is not attached, fail loudly instead of opening Chrome.
                     relay.wait_connected(timeout=10)
                     os.environ["JEV_DRIVER"] = "extension"
                     target_url = plan.get("start_url") or cur_url or "https://html.duckduckgo.com/html/"
 
                     def step_callback(step_info):
                         with self.lock:
+                            if self.generation != current_gen or self.session_id != current_sess_id:
+                                return
                             asst_msg["steps"].append(step_info)
                             self._save_session()
 
                     def approve_callback(action):
                         with self.lock:
+                            if self.generation != current_gen or self.session_id != current_sess_id:
+                                return False
                             self.status = "waiting_user"
                             content = (
                                 f"⚠️ The agent wants to click **'{action['label']}'** (sensitive/final action). "
@@ -280,6 +302,8 @@ class AssistBridge:
 
                         self.pending_event.wait(timeout=300)
                         with self.lock:
+                            if self.generation != current_gen or self.session_id != current_sess_id:
+                                return False
                             res = (self.user_input_response or "n").strip().lower()
                             self.status = "running"
                             return res in ("y", "yes", "true", "allow")
@@ -289,8 +313,14 @@ class AssistBridge:
                     ) as agent:
                         self.active_agent = agent
                         while agent.state["status"] not in {"done", "blocked"}:
+                            with self.lock:
+                                if self.generation != current_gen or self.session_id != current_sess_id:
+                                    break
                             try:
                                 for state in agent.run():
+                                    with self.lock:
+                                        if self.generation != current_gen or self.session_id != current_sess_id:
+                                            break
                                     # Each tick yields state; log an action only the first time it appears,
                                     # otherwise re-checks of the same page repeat the last action in the panel.
                                     if state.get("history") and state["history"][-1].get("step") not in {
@@ -311,6 +341,8 @@ class AssistBridge:
                                 # Form needs user information
                                 prompt_text = f"The form needs your **{missing.field}**. What should I enter?"
                                 with self.lock:
+                                    if self.generation != current_gen or self.session_id != current_sess_id:
+                                        break
                                     self.status = "waiting_user"
                                     ask_msg = {
                                         "id": self.msg_counter,
@@ -328,6 +360,8 @@ class AssistBridge:
                                 # Wait for user to chat back with the missing answer
                                 self.pending_event.wait(timeout=300)
                                 with self.lock:
+                                    if self.generation != current_gen or self.session_id != current_sess_id:
+                                        break
                                     ans = self.user_input_response or ""
                                     field_key = missing.field.lower().replace("-", "_").replace(" ", "_")
                                     self.profile[missing.field] = ans
@@ -341,6 +375,8 @@ class AssistBridge:
 
                         final_page = agent.state["page"]
                         with self.lock:
+                            if self.generation != current_gen or self.session_id != current_sess_id:
+                                return
                             self.current_url = final_page.get("url")
                             if agent.state["status"] == "done":
                                 from .chat_agent import synthesize_outcome
@@ -370,20 +406,22 @@ class AssistBridge:
                                 asst_msg["content"] += msg
 
                 with self.lock:
-                    self.status = "idle"
-                    self._save_session()
+                    if self.generation == current_gen and self.session_id == current_sess_id:
+                        self.status = "idle"
+                        self._save_session()
             except Exception as exc:
                 with self.lock:
-                    self.status = "error"
-                    err_msg = {
-                        "id": self.msg_counter,
-                        "role": "assistant",
-                        "content": f"❌ **Error:** {exc}",
-                        "time": time.strftime("%H:%M"),
-                    }
-                    self.msg_counter += 1
-                    self.messages.append(err_msg)
-                    self._save_session()
+                    if self.generation == current_gen and self.session_id == current_sess_id:
+                        self.status = "error"
+                        err_msg = {
+                            "id": self.msg_counter,
+                            "role": "assistant",
+                            "content": f"❌ **Error:** {exc}",
+                            "time": time.strftime("%H:%M"),
+                        }
+                        self.msg_counter += 1
+                        self.messages.append(err_msg)
+                        self._save_session()
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
@@ -396,14 +434,20 @@ class AssistBridge:
     def stop(self):
         worker = None
         with self.lock:
+            self.generation += 1
             self.pending_event.set()
             self.status = "idle"
             if self.active_agent:
                 self.active_agent.state["status"] = "blocked"
+                if hasattr(self.active_agent, "browser") and self.active_agent.browser:
+                    try:
+                        self.active_agent.browser.close()
+                    except Exception:
+                        pass
             worker = self.worker_thread
             self._save_session()
         if worker and worker.is_alive() and worker != threading.current_thread():
-            worker.join(timeout=2.0)
+            worker.join(timeout=1.0)
 
     def reset(self):
         return self.new_session()

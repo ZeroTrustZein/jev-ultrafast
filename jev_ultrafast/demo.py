@@ -158,12 +158,14 @@ class Handler(BaseHTTPRequestHandler):
                 elif path in ("/api/assist/history/load", "/api/chat/history/load"):
                     state = BRIDGE.load_session(body.get("id"))
                     return self.send(200, json.dumps(state))
-                elif path in ("/api/assist/history/new", "/api/chat/history/new"):
+                elif path in (
+                    "/api/assist/history/new",
+                    "/api/chat/history/new",
+                    "/api/assist/reset",
+                    "/api/chat/reset",
+                ):
                     state = BRIDGE.new_session()
                     return self.send(200, json.dumps(state))
-                elif path == "/api/chat/reset":
-                    BRIDGE.reset()
-                    return self.send(200, json.dumps({"status": "reset"}))
             except Exception as exc:
                 return self.send(400, json.dumps({"error": str(exc)}))
         if self.headers.get("X-Demo-Token") != TOKEN or self.headers.get("Origin") not in (None, ORIGIN):

@@ -10,13 +10,37 @@ from pathlib import Path
 
 from .model import json_content, post_json
 
-CHAT_SYSTEM = """You are Jev Assist, a conversational browser agent. You help users navigate official portals,
-fill complex applications, book appointments, and upload documents.
+CHAT_SYSTEM = """You are Jev Assist, an AI browser co-pilot and conversational agent. You help users
+automate web tasks: editing pages and wikis, researching, navigating portals, filling forms and applications,
+booking appointments, and uploading documents.
 
 You have two jobs:
 1. TALK to the user: Be clear, proactive, and concise. Explain what you found, what you did, what assumptions you made,
-   and ask clearly for missing personal details or documents needed by the form.
+   and ask clearly for missing personal details or documents needed by the task.
 2. DRIVE the browser: Decide the next website/form step for the fast browser agent.
+
+CURRENT ACTIVE TAB & URL HANDLING (CRITICAL):
+- The prompt prominently displays "CURRENT ACTIVE TAB: <url>".
+- This is the webpage currently open in the user's browser in front of them right now.
+- If CURRENT ACTIVE TAB is provided and the user refers to "this tab", "this page", "here", "the page",
+  or asks to edit, add, insert, or fill something without naming a different site:
+  * You MUST immediately use CURRENT ACTIVE TAB.
+  * Set "start_url" to that URL (or null to stay on the page).
+  * NEVER claim the URL is missing or ask the user for a page link/URL when CURRENT ACTIVE TAB is provided!
+  * NEVER hallucinate unrelated websites, "timetable portal", or generic forms. Base your plan on the active tab.
+  * If CURRENT ACTIVE TAB is a Wikipedia article or edit page, you are editing that exact Wikipedia page.
+
+PAGE EDITING & INSERTING ENTRIES (CRITICAL):
+- When the user asks to add or insert an entry into an open page, list, document, or wiki:
+  * "action_required" MUST be true.
+  * Formulate a "goal" that explicitly instructs the agent to:
+    1. Locate and click into the text editor / wikitext area (switch to source editing if visual editor is active).
+    2. Insert the entry formatted properly into the editor at the correct location (e.g. alphabetical order).
+    3. Fill the edit summary if present (e.g. "Add <entry>").
+    4. Click "Show preview" (or preview button) so the edit is staged and visible to the user before publishing.
+    5. The goal must explicitly instruct the agent to click into the editor and insert the entry.
+       Never stop after just scrolling or opening the editor!
+  * In "reply", inform the user what entry will be added, where it will be placed, and that it will be previewed.
 
 DOCUMENT FACT EXTRACTION (CRITICAL):
 - When the user attaches their passport, ID card, visa, enrollment cert, or contract, you MUST examine it immediately
@@ -40,8 +64,9 @@ Return a JSON object:
 }
 
 Guidelines:
-- If the user says 'do everything for me' or gives a goal, outline the plan, find the portal, and start filling.
-- When asked to search, find, navigate, open, filter, or fill, action_required MUST be true and goal MUST be non-empty.
+- If the user says 'do everything for me' or gives a goal, outline the plan, find the target page/portal, and start.
+- When asked to search, find, navigate, open, filter, fill, or edit,
+  action_required MUST be true and goal MUST be non-empty.
 - Search fields: instruct the agent to type the query AND click Search / Submit to execute the search.
 - SHOWTIMES: In German cinemas, English version is OV or OmU. If requested timeframe is unavailable, pick closest.
 - SCOPE: if the user names specific fields ("fill my email"), the goal must touch ONLY those fields and then stop.
@@ -60,14 +85,33 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
 
     from .planner import documents
 
-    context = {
-        "current_url": current_url,
-        "known_profile": profile,
-        "available_files": [Path(f).name for f in files],
-        "conversation": conversation_history[-8:],
-    }
-    # The planner reads the attachments themselves (PDF text, images, text files), not just their names.
-    parts = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
+    url_display = current_url.strip() if current_url and current_url.strip() else "None (blank/new tab)"
+    prompt_lines = [
+        f"CURRENT ACTIVE TAB: {url_display}",
+        "",
+        "CONTEXT:",
+        f"- Known Profile: {json.dumps(profile, ensure_ascii=False) if profile else '{}'}",
+        f"- Attached Files: {[Path(f).name for f in files] if files else '[]'}",
+        "",
+        "CONVERSATION HISTORY:",
+    ]
+    for m in conversation_history[-8:]:
+        role = "USER" if m.get("role") == "user" else "ASSISTANT"
+        prompt_lines.append(f"{role}: {m.get('content', '')}")
+
+    prompt_lines.extend([
+        "",
+        "INSTRUCTIONS FOR THIS TURN:",
+        f"1. Check CURRENT ACTIVE TAB: {url_display}.",
+        "2. If the user refers to 'this tab', 'this page', 'here', or asks to add/edit/fill without specifying",
+        "   a new URL, use CURRENT ACTIVE TAB immediately.",
+        "3. If asked to add or insert an entry to a page/list/wiki, formulate a goal that explicitly instructs",
+        "   the agent to click into the editor and insert the entry properly formatted.",
+        "4. Return only the JSON object as specified in the system prompt."
+    ])
+
+    user_text = "\n".join(prompt_lines)
+    parts = [{"type": "text", "text": user_text}]
     for f in files:
         try:
             parts += documents([f])

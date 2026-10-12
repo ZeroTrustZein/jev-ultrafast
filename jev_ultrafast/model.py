@@ -298,6 +298,7 @@ Return a JSON object:
 }
 RULES:
 - Prefer choosing target from the table. Use CLICK_COORDS only for visual controls (canvas, map, icon).
+- SEAT MAPS & VISUAL PICKERS: For seating charts (cinema, airline, theater), interactive maps, or canvas widgets without table indices, choose CLICK_COORDS with the exact (x, y) coordinates of the seat/control in CSS pixels. Select central/middle seats.
 - Never choose WAIT on an idle page. Recent WAIT actions are not loading. Prefer a useful visible control over WAIT.
 - Submit populated search fields: if a search box has a value and Search/Submit is visible, CLICK it.
 - Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE."""
@@ -323,6 +324,7 @@ def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
 
     user_text = f"""GOAL: {goal}
 TRIGGER: {reason}
+VIEWPORT: width={page.get('w', 1200)}, height={page.get('h', 800)} (ensure CLICK_COORDS x, y are within this range)
 RECENT ACTIONS: {json.dumps([{k: h.get(k) for k in ('action', 'text', 'page_changed')} for h in history[-5:]])}
 PAGE URL: {page.get('url', '')}
 PAGE TITLE: {page.get('title', '')}

@@ -17,6 +17,31 @@ from browser_harness.helpers import cdp
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
+DISMISS_COOKIES_JS = """(() => {
+  const re = /^(ich lehne ab|alle ablehnen|nur notwendige|nur essenzielle|cookies ablehnen|reject all|decline all|reject|decline|disagree|refuse|deny|schließen|close)$/i;
+  const buttons = [...document.querySelectorAll('button, a, [role="button"]')];
+  for (const b of buttons) {
+    if (re.test(b.innerText?.trim() || "") && b.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) {
+      b.click();
+      return true;
+    }
+  }
+  const selectors = [
+    'button[id*="reject" i]', 'button[id*="decline" i]', 'button[id*="deny" i]',
+    'button[class*="reject" i]', 'button[class*="decline" i]',
+    '#didomi-notice-agree-button', '#onetrust-reject-all-handler',
+    '.cc-dismiss', '.cookie-banner button', 'button[data-testid*="cookie" i]'
+  ];
+  for (const s of selectors) {
+    const el = document.querySelector(s);
+    if (el && el.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) {
+      el.click();
+      return true;
+    }
+  }
+  return false;
+})()"""
+
 # Common paths across Windows, macOS, and Linux. Order: Brave first if requested, Chrome first otherwise.
 CANDIDATES = {
     "brave": [
@@ -168,6 +193,12 @@ class Browser:
                 )
             except RuntimeError:
                 pass
+        # Auto-dismiss cookie walls and consent overlays
+        try:
+            if self.evaluate(DISMISS_COOKIES_JS):
+                time.sleep(0.15)
+        except Exception:
+            pass
         for attempt in range(25):
             try:
                 return browser_operation(
@@ -240,6 +271,8 @@ def browser_operation(request):
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind == "coords":
             x, y = int(action["x"]), int(action["y"])
+            call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+            time.sleep(0.04)
             for event in ("mousePressed", "mouseReleased"):
                 call("Input.dispatchMouseEvent", type=event, x=x, y=y, button="left", clickCount=1)
             return {"executed": "coords"}

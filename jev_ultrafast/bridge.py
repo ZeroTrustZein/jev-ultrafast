@@ -186,8 +186,20 @@ class AssistBridge:
 
         def worker():
             try:
+                # Pre-warm local server & relay concurrently while planner thinks
+                import re
+                from . import relay
+                from .planner import ensure_local_server
+
+                ensure_local_server()
+                relay.start()
+
                 # 1. Ask conversational planner for response and next actions
                 with self.lock:
+                    if not self.current_url:
+                        url_match = re.search(r"https?://[^\s]+", text)
+                        if url_match:
+                            self.current_url = url_match.group(0)
                     history_for_llm = [{"role": m["role"], "content": m["content"]} for m in self.messages]
                     prof = dict(self.profile)
                     flist = list(self.files)

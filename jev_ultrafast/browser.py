@@ -168,16 +168,16 @@ class Browser:
                 )
             except RuntimeError:
                 pass
-        for attempt in range(10):
+        for attempt in range(25):
             try:
                 return browser_operation(
                     {"operation": "observe", "session": self.session, "screenshot": screenshot,
                      "upload": self.allow_upload}
                 )
             except StalePage:
-                if attempt == 9:
+                if attempt == 24:
                     raise
-                time.sleep(0.02)
+                time.sleep(0.1)
         raise StalePage("Page did not settle")
 
     def fresh(self, page, action=None):

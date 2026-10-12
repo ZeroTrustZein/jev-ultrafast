@@ -265,7 +265,11 @@ class Agent:
 
     def run(self):
         while self.state["status"] not in {"done", "blocked"}:
-            yield self.command("tick")
+            try:
+                yield self.command("tick")
+            except StalePage:
+                time.sleep(0.3)
+                continue
 
     def close(self):
         self.browser.close()

@@ -43,6 +43,7 @@ def judge(goal, page):
     return json_content(result)
 
 
+passed = total = 0
 for line in open(args.tasks, encoding="utf-8"):
     task = json.loads(line)
     error, state, verdict = None, None, {}
@@ -75,4 +76,6 @@ for line in open(args.tasks, encoding="utf-8"):
     }
     with open(args.out, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    passed, total = passed + row["passed"], total + 1
     print(args.arm, row["passed"], row["status"], row["ms"], task["goal"][:80], flush=True)
+print(f"ARM {args.arm}: {passed}/{total} passed")

@@ -46,7 +46,7 @@ def judge(goal, page):
 passed = total = 0
 for line in open(args.tasks, encoding="utf-8"):
     task = json.loads(line)
-    error, state, verdict = None, None, {}
+    error, state, verdict, expect_ok = None, None, {}, None
     try:
         with Agent(task["url"], task["goal"], approve=lambda _action: False) as agent:
             try:
@@ -58,10 +58,18 @@ for line in open(args.tasks, encoding="utf-8"):
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             state = agent.snapshot()
+            if "expect" in task:
+                result_text = agent.browser.evaluate("document.getElementById('result')?.textContent?.trim() || ''")
+                expect_ok = result_text == task["expect"]
             # The judge sees a fresh observation, not the agent's last cached page.
             verdict = judge(task["goal"], agent.browser.observe(screenshot=False))
     except Exception as exc:
         error = error or f"{type(exc).__name__}: {exc}"
+    if "expect" in task and expect_ok is None:
+        expect_ok = False
+    passed = bool(state) and state["status"] == "done" and not error and bool(verdict.get("done"))
+    if "expect" in task:
+        passed = passed and bool(expect_ok)
     row = {
         "arm": args.arm,
         **task,
@@ -69,7 +77,8 @@ for line in open(args.tasks, encoding="utf-8"):
         "error": error,
         "judge_done": bool(verdict.get("done")),
         "missing": verdict.get("missing"),
-        "passed": bool(state) and state["status"] == "done" and not error and bool(verdict.get("done")),
+        **({"expect_ok": expect_ok} if "expect" in task else {}),
+        "passed": passed,
         "ms": state["elapsed_ms"] if state else 0,
         "decisions": len(state["decisions"]) if state else 0,
         "steps": [h["action"] for h in state["history"]] if state else [],

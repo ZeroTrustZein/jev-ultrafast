@@ -4,8 +4,20 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
-artifacts/
+artifacts/*
+!artifacts/fixtures/
+!artifacts/eval-vision.jsonl
 *.egg-info/
 
 dist/
 .claude/
+
+# Reproducible vision eval fixtures
+!artifacts/
+artifacts/*
+!artifacts/eval-vision.jsonl
+!artifacts/fixtures/
+artifacts/fixtures/*
+!artifacts/fixtures/vision/
+!artifacts/fixtures/vision/*.html
+!artifacts/fixtures/vision/README.md

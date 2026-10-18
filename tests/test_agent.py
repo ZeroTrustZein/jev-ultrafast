@@ -473,6 +473,7 @@ def test_browser_finder_discovers_chrome_or_brave():
 
 def test_gear2_triggers_on_low_confidence(runner, monkeypatch):
     monkeypatch.setenv("GEAR2", "1")
+    monkeypatch.setenv("GEAR2_BACKEND", "vlm")
     monkeypatch.setenv("GEAR2_CONFIDENCE_THRESHOLD", "0.7")
     monkeypatch.setattr(
         loop,
@@ -531,6 +532,60 @@ def test_gear2_click_coords_dispatches_mouse_event(runner):
     assert act_arg["kind"] == "coords"
     assert act_arg["x"] == 150 and act_arg["y"] == 250
     assert runner.state["history"][-1]["gear"] == 2
+
+
+JEV_OPS = ["TYPE_TEXT", "CLICK", "WAIT", "DONE", "BLOCKED", "CLICK_COORDS"]
+
+
+def jev_vision(monkeypatch, exists, box=None):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    answers = {
+        "operation": choice(JEV_OPS, "CLICK_COORDS"),
+        "target_exists": {"type": "noul", "choice": exists},
+        "target_box": {"type": "box", "box": box or {"top": 0.25, "bottom": 0.75, "left": 0.4, "right": 0.6}},
+    }
+    post = Mock(return_value={"answers": answers, "model": "jev-1.14.0"})
+    monkeypatch.setattr(model, "post_json", post)
+    p = {**page(), "w": 1000, "h": 800}
+    return model.choose_vision_jev(p, "Pick a seat", [], "abc123", reason="low confidence"), post
+
+
+def test_gear2_jev_request_carries_screen_asset_and_vision_questions(monkeypatch):
+    _, post = jev_vision(monkeypatch, True)
+    url, _key, body = post.call_args.args
+    assert url.endswith("/v1/systemone")
+    assert post.call_args.kwargs["headers"] == {"TypeSafe-Danger-Zone-Images": "true"}
+    screen = body["state"]["screen"]
+    assert screen.endswith("-screen")
+    assert body["assets"][screen] == {"type": "image", "data_base64": "abc123", "format": "jpeg"}
+    assert body["questions"]["target_exists"]["type"] == "noul"
+    assert body["questions"]["target_box"]["type"] == "box"
+    assert "Pick a seat" in body["questions"]["target_box"]["instructions"]
+    assert "CLICK_COORDS" in body["questions"]["operation"]["criteria"]
+
+
+def test_gear2_jev_box_converts_to_clamped_viewport_pixels(monkeypatch):
+    d, _ = jev_vision(monkeypatch, True)
+    assert (d["choice"], d["x"], d["y"], d["gear"]) == ("CLICK_COORDS", 500, 400, 2)
+    d, _ = jev_vision(monkeypatch, True, {"top": 1.0, "bottom": 1.2, "left": -0.4, "right": 0.0})
+    assert (d["x"], d["y"]) == (0, 799)
+
+
+def test_gear2_jev_absent_target_blocks(monkeypatch):
+    d, _ = jev_vision(monkeypatch, False)
+    assert d["choice"] == "BLOCKED" and d["x"] is None
+
+
+@pytest.mark.parametrize("backend", ["jev", "vlm", "laya"])
+def test_gear2_backend_switch(monkeypatch, backend):
+    monkeypatch.setenv("GEAR2_BACKEND", backend)
+    monkeypatch.delenv("GEAR2_LAYA_URL", raising=False)
+    jev, vlm = Mock(return_value="jev"), Mock(return_value="vlm")
+    monkeypatch.setattr(loop, "choose_vision_jev", jev)
+    monkeypatch.setattr(loop, "choose_vision", vlm)
+    assert loop.gear2(page(), "g", [], "s", "r") == ("vlm" if backend == "vlm" else "jev")
+    if backend != "vlm":
+        assert jev.call_args.kwargs["base"] == ("http://127.0.0.1:8791" if backend == "laya" else None)
 
 
 def test_endless_waits_on_unchanged_page_stop_the_run(runner):

@@ -1,0 +1,30 @@
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_01_trash.html", "goal": "Click the trash-can icon to remove the item.", "expect": "Selected: Trash"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_02_star.html", "goal": "Click the star icon to favorite this page.", "expect": "Selected: Star"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_03_gear.html", "goal": "Click the gear-shaped icon to open settings.", "expect": "Selected: Gear"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_download.html", "goal": "Click the download icon to save the file.", "expect": "Selected: Download"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_pencil.html", "goal": "Click the pencil icon to edit the document.", "expect": "Selected: Pencil"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/icon_search.html", "goal": "Click the magnifying glass icon to search.", "expect": "Selected: Search"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_red_circle.html", "goal": "Click the red circle on the canvas.", "expect": "Selected: Red Circle"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_blue_square.html", "goal": "Click the blue square on the board.", "expect": "Selected: Blue Square"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_green_triangle.html", "goal": "Click the green triangle on the canvas.", "expect": "Selected: Green Triangle"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_red_bullseye.html", "goal": "Click the red bullseye of the target on the right.", "expect": "Selected: Red Bullseye"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_coral_slice.html", "goal": "Click the coral slice of the pie chart.", "expect": "Selected: Coral Slice"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/canvas_purple_notch.html", "goal": "Click the purple notch at position 4 on the gauge.", "expect": "Selected: Level 4"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_window_free.html", "goal": "Pick the only free window seat on the airplane seating chart.", "expect": "Selected: 3A"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_front_row.html", "goal": "Select the only available seat in the front row.", "expect": "Selected: 1C"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_accessible.html", "goal": "Select the accessible wheelchair seat in row 2.", "expect": "Selected: 2D"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_adjacent_pair.html", "goal": "Pick seat 2B to sit next to the other available seat at table 2.", "expect": "Selected: 2B"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_parking.html", "goal": "Click the only available parking spot in the lot.", "expect": "Selected: Bay B3"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/seat_head_chair.html", "goal": "Select the chair at the head of the conference table on the left.", "expect": "Selected: Chair H1"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_berlin.html", "goal": "Click the destination tile showing 'Berlin'.", "expect": "Selected: Berlin"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_invoice.html", "goal": "Click the tile displaying 'Invoice'.", "expect": "Selected: Invoice"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_urgent.html", "goal": "Click the status tile showing 'Urgent'.", "expect": "Selected: Urgent"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_freeship.html", "goal": "Click the voucher that says 'FREESHIP'.", "expect": "Selected: FREESHIP"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_summit.html", "goal": "Click the card displaying the word 'SUMMIT'.", "expect": "Selected: SUMMIT"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/image_orwell.html", "goal": "Click the author card for 'Orwell'.", "expect": "Selected: Orwell"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_island.html", "goal": "Click the offshore island region on the southeast of the map.", "expect": "Selected: Southeast Island"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_legend.html", "goal": "Click the Logistics Zone indicated by the amber swatch in the map legend.", "expect": "Selected: Logistics Zone"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_north.html", "goal": "Click the northernmost peninsula province on the map.", "expect": "Selected: Northern Peninsula"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_junction.html", "goal": "Click the transfer station at the crossing of the red and blue lines.", "expect": "Selected: Central Junction"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_cafe.html", "goal": "Click the department with the coffee cup icon in the southeast corner.", "expect": "Selected: Cafe"}
+{"url": "http://127.0.0.1:8000/artifacts/fixtures/vision/map_clock_tower.html", "goal": "Click the eastern building with the clock tower spire.", "expect": "Selected: Clock Tower Hall"}

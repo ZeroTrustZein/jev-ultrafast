@@ -96,6 +96,10 @@ class Agent:
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
             gear2_on = os.environ.get("GEAR2", "1") == "1"
+            if os.environ.get("JEV_LOG") and not state["page"].get("screenshot"):
+                # Teacher logs pair each decision with its pixels; no capture cost when not logging.
+                shot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)
+                state["page"]["screenshot"] = shot["data"]
             try:
                 state["decision"] = choose(state["page"], state["goal"], state["history"])
             except Exception as exc:

@@ -1,5 +1,6 @@
 """Offline contracts for a dynamic operation/target policy. No paid APIs."""
 
+import base64
 import json
 import time
 from copy import deepcopy
@@ -736,4 +737,94 @@ def test_bridge_updates_current_url_from_explicit_message(tmp_path, monkeypatch)
     assert bridge.current_url == explicit_url
 
 
+def teacher_page():
+    p = page()
+    for a in p["actions"]:
+        if "node" in a:
+            a["rect"] = {"x": a["node"], "y": 5, "w": 40, "h": 20}
+    p.update(w=1200, h=800, screenshot=base64.b64encode(b"jpeg-bytes").decode())
+    return p
 
+
+def teacher_post(calls):
+    def post(_url, _key, body, **kwargs):
+        calls.append((body, kwargs))
+        ops = body["questions"]["operation"]["criteria"]
+        return {"model": "jev", "answers": {"operation": choice(ops, "CLICK"), "click_target": choice(["1", "2"], "2")}}
+
+    return post
+
+
+def test_teacher_log_saves_screenshot_rects_viewport_and_gear(monkeypatch, tmp_path):
+    log = tmp_path / "task.jsonl"
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("JEV_LOG", str(log))
+    monkeypatch.delenv("VISION_TEACHER", raising=False)
+    monkeypatch.setattr(model, "post_json", teacher_post([]))
+    model.choose(teacher_page(), "Find a book", [])
+    line = json.loads(log.read_text(encoding="utf-8"))
+    assert line["gear"] == 1 and line["model"] == "jev" and "click_target" in line["answers"]
+    assert line["viewport"] == {"w": 1200, "h": 800}
+    assert line["rects"] == {"1": {"x": 10, "y": 5, "w": 40, "h": 20}, "2": {"x": 20, "y": 5, "w": 40, "h": 20}}
+    assert line["image"].startswith("img/") and (tmp_path / line["image"]).read_bytes() == b"jpeg-bytes"
+    assert "rect" not in json.dumps(line["request"]["state"]["elements"])
+
+
+def test_vision_teacher_off_leaves_request_unchanged(monkeypatch, tmp_path):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.delenv("VISION_TEACHER", raising=False)
+    monkeypatch.delenv("JEV_LOG", raising=False)
+    plain, logged = [], []
+    monkeypatch.setattr(model, "post_json", teacher_post(plain))
+    model.choose(teacher_page(), "Find a book", [])
+    monkeypatch.setenv("JEV_LOG", str(tmp_path / "task.jsonl"))
+    monkeypatch.setattr(model, "post_json", teacher_post(logged))
+    model.choose(teacher_page(), "Find a book", [])
+    assert plain == logged and plain[0][1] == {}
+
+
+def test_vision_teacher_sends_screen_asset_header_and_box_question(monkeypatch, tmp_path):
+    log = tmp_path / "task.jsonl"
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("JEV_LOG", str(log))
+    monkeypatch.setenv("VISION_TEACHER", "1")
+    calls = []
+    monkeypatch.setattr(model, "post_json", teacher_post(calls))
+    p = teacher_page()
+    d = model.choose(p, "Find a book", [])
+    body, kwargs = calls[0]
+    screen = body["state"]["screen"]
+    assert screen.endswith("-screen")
+    assert body["assets"] == {screen: {"type": "image", "data_base64": p["screenshot"], "format": "jpeg"}}
+    assert kwargs == {"headers": {"TypeSafe-Danger-Zone-Images": "true"}}
+    assert body["questions"]["vision_box"]["type"] == "box"
+    assert "Find a book" in body["questions"]["vision_box"]["instructions"]
+    assert d["choice"] == "e3"
+    line = json.loads(log.read_text(encoding="utf-8"))
+    assert "assets" not in line["request"] and line["image"] == f"img/{screen[: -len('-screen')]}.jpg"
+
+
+def test_gear2_decision_is_logged(monkeypatch, tmp_path):
+    log = tmp_path / "task.jsonl"
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setenv("JEV_LOG", str(log))
+    reply = '{"operation": "CLICK", "target": "2", "reason": "go"}'
+    monkeypatch.setattr(model, "post_json", lambda *_: {"choices": [{"message": {"content": reply}}]})
+    p = teacher_page()
+    d = model.choose_vision(p, "Find a book", [], p["screenshot"])
+    line = json.loads(log.read_text(encoding="utf-8"))
+    assert d["choice"] == "e3" and line["gear"] == 2 and line["output"]["target"] == "2"
+    assert line["rects"]["2"]["x"] == 20 and (tmp_path / line["image"]).exists()
+
+
+def test_agent_screenshots_only_when_teacher_logging(runner, monkeypatch):
+    runner.state["status"] = "ready"
+    runner.state["browser"].call = Mock(return_value={"data": "c2hvdA=="})
+    monkeypatch.setenv("GEAR2", "0")
+    monkeypatch.setattr(loop, "choose", Mock(return_value=decision()))
+    monkeypatch.delenv("JEV_LOG", raising=False)
+    runner.command("predict")
+    runner.state["browser"].call.assert_not_called()
+    monkeypatch.setenv("JEV_LOG", "unused.jsonl")
+    runner.command("predict")
+    assert runner.state["page"]["screenshot"] == "c2hvdA=="

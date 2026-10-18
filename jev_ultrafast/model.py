@@ -1,10 +1,13 @@
 """TypeSafe makes choices; an optional small OpenAI-compatible model writes field values."""
 
+import base64
 import json
 import math
 import os
 import re
 import time
+import uuid
+from pathlib import Path
 
 import httpx
 
@@ -14,13 +17,15 @@ from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
 CLIENT = httpx.Client(http2=True, timeout=120)
 
 
-def post_json(url, key, body):
+def post_json(url, key, body, headers=None):
     current_body = dict(body)
     for _ in range(5):
         res = None
         for attempt in range(3):
             try:
-                response = CLIENT.post(url, json=current_body, headers={"Authorization": f"Bearer {key}"})
+                response = CLIENT.post(
+                    url, json=current_body, headers={"Authorization": f"Bearer {key}", **(headers or {})}
+                )
             except httpx.HTTPError:
                 raise RuntimeError("Model connection failed; no action executed.") from None
             if response.status_code in {429, 529, 503} and attempt < 2:
@@ -87,6 +92,20 @@ def validate_choice(answer, ids):
         choice = answer.get("choice") if isinstance(answer, dict) else None
         raise ValueError(f"Invalid TypeSafe response (choice={choice!r}); no action executed.")
     return answer
+
+
+def teacher_log(entry, page, targets, screenshot, shot=None):
+    """Teacher data for a future vision model: one JSONL line per decision, screenshot saved beside the log."""
+    path = Path(os.environ["JEV_LOG"])
+    if screenshot:
+        shot = shot or uuid.uuid4().hex
+        (path.parent / "img").mkdir(parents=True, exist_ok=True)
+        (path.parent / "img" / f"{shot}.jpg").write_bytes(base64.b64decode(screenshot))
+        entry["image"] = f"img/{shot}.jpg"
+    entry["rects"] = {t.split(":")[0]: a["rect"] for g in targets.values() for t, a in g.items() if "rect" in a}
+    entry["viewport"] = {"w": page.get("w"), "h": page.get("h")}
+    with path.open("a", encoding="utf-8") as log:
+        log.write(json.dumps(entry) + "\n")
 
 
 def action_space(actions):
@@ -160,16 +179,35 @@ def choose(state, goal, history):
         },
         "questions": questions,
     }
+    screenshot = state.get("screenshot") if os.environ.get("JEV_LOG") else None
+    shot = uuid.uuid4().hex
     started = time.perf_counter()
     if os.environ.get("JEV_BACKEND") == "local":
         result = local.systemone(body, post_json)
     else:
         base = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
-        result = post_json(base + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+        extra = {}
+        if screenshot and os.environ.get("VISION_TEACHER"):
+            # Jev 1.14 image asset plus a box head: visual teacher labels. Not used by the action choice.
+            body = {
+                **body,
+                "state": {**body["state"], "screen": f"{shot}-screen"},
+                "questions": {
+                    **questions,
+                    "vision_box": {
+                        "type": "box",
+                        "instructions": f"the element the agent should act on next for goal: {goal}, in `screen`",
+                    },
+                },
+                "assets": {f"{shot}-screen": {"type": "image", "data_base64": screenshot, "format": "jpeg"}},
+            }
+            extra = {"headers": {"TypeSafe-Danger-Zone-Images": "true"}}
+        result = post_json(base + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body, **extra)
     if os.environ.get("JEV_LOG"):
-        # Teacher data for distillation: the exact systemone request and the full answer distributions.
-        with open(os.environ["JEV_LOG"], "a", encoding="utf-8") as log:
-            log.write(json.dumps({"request": body, "answers": result["answers"], "model": result.get("model")}) + "\n")
+        # Teacher data for distillation: the exact systemone request (image saved as a file) and full answers.
+        request = {k: v for k, v in body.items() if k != "assets"}
+        entry = {"request": request, "answers": result["answers"], "model": result.get("model"), "gear": 1}
+        teacher_log(entry, state, targets, screenshot, shot)
     operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None
@@ -357,6 +395,9 @@ ELEMENT TABLE:
     )
     data = json_content(result)
     latency_ms = round((time.perf_counter() - started) * 1000)
+    if os.environ.get("JEV_LOG"):
+        entry = {"prompt": user_text, "output": data, "model": f"vision:{model}", "gear": 2}
+        teacher_log(entry, page, targets, screenshot_b64)
 
     op = str(data.get("operation", "WAIT")).upper()
     target = str(data.get("target", ""))

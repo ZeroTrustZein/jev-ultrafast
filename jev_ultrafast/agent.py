@@ -7,11 +7,20 @@ import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
-from .model import action_space, choose, choose_vision, field_context, field_text
+from .model import action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
 # Irreversible or outward-facing clicks. Code-owned, so a model cannot talk its way past the gate.
 SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign|apply|delete|checkout)\b", re.I)
+
+
+def gear2(page, goal, history, screenshot, reason):
+    """GEAR2_BACKEND: jev (TypeSafe vision, default) | vlm (OmniRoute VLM) | laya (local Jev-compatible server)."""
+    backend = os.environ.get("GEAR2_BACKEND", "jev")
+    if backend == "vlm":
+        return choose_vision(page, goal, history, screenshot, reason=reason)
+    base = os.environ.get("GEAR2_LAYA_URL", "http://127.0.0.1:8791") if backend == "laya" else None
+    return choose_vision_jev(page, goal, history, screenshot, reason=reason, base=base)
 
 
 class Agent:
@@ -92,7 +101,7 @@ class Agent:
             except Exception as exc:
                 if gear2_on:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
-                    state["decision"] = choose_vision(
+                    state["decision"] = gear2(
                         state["page"], state["goal"], state["history"], screenshot, reason=f"gear 1 error: {exc}"
                     )
                 else:
@@ -114,7 +123,7 @@ class Agent:
                 )
                 try:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
-                    state["decision"] = choose_vision(
+                    state["decision"] = gear2(
                         state["page"], state["goal"], state["history"], screenshot, reason=trigger_reason
                     )
                 except Exception:

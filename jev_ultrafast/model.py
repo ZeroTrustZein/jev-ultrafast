@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+import uuid
 
 import httpx
 
@@ -14,13 +15,14 @@ from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
 CLIENT = httpx.Client(http2=True, timeout=120)
 
 
-def post_json(url, key, body):
+def post_json(url, key, body, headers=None):
     current_body = dict(body)
+    headers = {"Authorization": f"Bearer {key}", **(headers or {})}
     for _ in range(5):
         res = None
         for attempt in range(3):
             try:
-                response = CLIENT.post(url, json=current_body, headers={"Authorization": f"Bearer {key}"})
+                response = CLIENT.post(url, json=current_body, headers=headers)
             except httpx.HTTPError:
                 raise RuntimeError("Model connection failed; no action executed.") from None
             if response.status_code in {429, 529, 503} and attempt < 2:
@@ -122,7 +124,7 @@ def action_space(actions):
     return elements, targets, controls
 
 
-def choose(state, goal, history):
+def systemone_request(state, goal, history):
     elements, targets, controls = action_space(state["actions"])
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -160,24 +162,18 @@ def choose(state, goal, history):
         },
         "questions": questions,
     }
-    started = time.perf_counter()
-    if os.environ.get("JEV_BACKEND") == "local":
-        result = local.systemone(body, post_json)
-    else:
-        base = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
-        result = post_json(base + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
-    if os.environ.get("JEV_LOG"):
-        # Teacher data for distillation: the exact systemone request and the full answer distributions.
-        with open(os.environ["JEV_LOG"], "a", encoding="utf-8") as log:
-            log.write(json.dumps({"request": body, "answers": result["answers"], "model": result.get("model")}) + "\n")
-    operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
+    return body, operations, targets, controls
+
+
+def pick(answers, operations, targets, controls):
+    operation_answer = validate_choice(answers.get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None
     target_answer = None
     probabilities = {}
     if operation in targets:
         # Unused target heads cannot cause an action. Validate the head selected by the operation.
-        target_answer = validate_choice(result["answers"].get(operation.lower() + "_target", {}), targets[operation])
+        target_answer = validate_choice(answers.get(operation.lower() + "_target", {}), targets[operation])
         target = target_answer["choice"]
         choice = targets[operation][target]["id"]
         probabilities = {a["id"]: target_answer["probabilities"][index] for index, a in targets[operation].items()}
@@ -193,6 +189,23 @@ def choose(state, goal, history):
         "operation_probabilities": operation_answer["probabilities"],
         "target_probabilities": target_answer["probabilities"] if target_answer else {},
         "target_confidence": target_answer["confidence"] if target_answer else None,
+    }
+
+
+def choose(state, goal, history):
+    body, operations, targets, controls = systemone_request(state, goal, history)
+    started = time.perf_counter()
+    if os.environ.get("JEV_BACKEND") == "local":
+        result = local.systemone(body, post_json)
+    else:
+        base = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
+        result = post_json(base + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    if os.environ.get("JEV_LOG"):
+        # Teacher data for distillation: the exact systemone request and the full answer distributions.
+        with open(os.environ["JEV_LOG"], "a", encoding="utf-8") as log:
+            log.write(json.dumps({"request": body, "answers": result["answers"], "model": result.get("model")}) + "\n")
+    return {
+        **pick(result["answers"], operations, targets, controls),
         "raw_answers": result["answers"],
         "model": result["model"],
         "usage": result.get("usage", {}),
@@ -403,5 +416,53 @@ ELEMENT TABLE:
         "latency_ms": latency_ms,
         "gear": 2,
         "model": f"vision:{model}",
+        "usage": result.get("usage", {}),
+    }
+
+
+def choose_vision_jev(page, goal, history, screenshot_b64, reason="low confidence", base=None):
+    """Gear 2 on Jev 1.14 vision: Gear 1's questions plus CLICK_COORDS, an existence check, and a box.
+    `base` overrides the TypeSafe URL (e.g. a local Laya server, which needs no key)."""
+    body, operations, targets, controls = systemone_request(page, goal, history)
+    operations["CLICK_COORDS"] = "Click a visual target with no matching element, e.g. a canvas, map, or icon."
+    screen = f"{uuid.uuid4()}-screen"
+    body["model"] = os.environ.get("TYPESAFE_MODEL", "jev-1.14.0")
+    body["assets"] = {screen: {"type": "image", "data_base64": screenshot_b64, "format": "jpeg"}}
+    body["state"].update(screen=screen, trigger=reason)
+    body["questions"]["target_exists"] = {
+        "type": "noul",
+        "instructions": f"Is the visual target needed for this goal visible in `screen`? Goal: {goal}",
+    }
+    body["questions"]["target_box"] = {
+        "type": "box",
+        "instructions": f"The visual target to click next in `screen` for this goal: {goal}",
+    }
+    key = "" if base else os.environ["TYPESAFE_API_KEY"]
+    base = (base or os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai")).rstrip("/")
+    started = time.perf_counter()
+    result = post_json(base + "/v1/systemone", key, body, headers={"TypeSafe-Danger-Zone-Images": "true"})
+    answers = result["answers"]
+    decision = pick(answers, operations, targets, controls)
+    x = y = None
+    if decision["operation"] == "CLICK_COORDS":
+        # Assumed noul shape: {"choice": true|false} or {"value": ...}; anything not clearly yes counts as absent.
+        exists = answers.get("target_exists", {})
+        exists = exists.get("choice", exists.get("value"))
+        if exists is not True and str(exists).lower() not in {"true", "yes", "likely"}:
+            decision.update(choice="BLOCKED", operation="BLOCKED", probabilities={"BLOCKED": 1.0})
+        else:
+            box = answers["target_box"]["box"]
+            w, h = page.get("w", 1200), page.get("h", 800)
+            x = min(max(round((box["left"] + box["right"]) / 2 * w), 0), w - 1)
+            y = min(max(round((box["top"] + box["bottom"]) / 2 * h), 0), h - 1)
+    return {
+        **decision,
+        "x": x,
+        "y": y,
+        "text": None,
+        "reason": reason,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "gear": 2,
+        "model": f"vision:{result.get('model', body['model'])}",
         "usage": result.get("usage", {}),
     }

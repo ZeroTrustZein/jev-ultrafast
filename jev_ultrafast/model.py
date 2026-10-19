@@ -19,7 +19,8 @@ CLIENT = httpx.Client(http2=True, timeout=120)
 
 def post_json(url, key, body, headers=None):
     current_body = dict(body)
-    headers = {"Authorization": f"Bearer {key}", **(headers or {})}
+    auth_headers = {"Authorization": f"Bearer {key}"} if key else {}
+    headers = {**auth_headers, **(headers or {})}
     for _ in range(5):
         res = None
         for attempt in range(3):
@@ -480,6 +481,8 @@ def choose_vision_jev(page, goal, history, screenshot_b64, reason="low confidenc
     started = time.perf_counter()
     result = post_json(base + "/v1/systemone", key, body, headers={"TypeSafe-Danger-Zone-Images": "true"})
     answers = result["answers"]
+    if "CLICK_COORDS" not in answers.get("operation", {}).get("probabilities", {}):
+        answers["operation"]["probabilities"]["CLICK_COORDS"] = 0.0
     if os.environ.get("JEV_LOG"):
         request = {k: v for k, v in body.items() if k != "assets"}
         entry = {"request": request, "answers": answers, "model": result.get("model"), "gear": 2}
@@ -489,8 +492,14 @@ def choose_vision_jev(page, goal, history, screenshot_b64, reason="low confidenc
     if decision["operation"] == "CLICK_COORDS":
         # Assumed noul shape: {"choice": true|false} or {"value": ...}; anything not clearly yes counts as absent.
         exists = answers.get("target_exists", {})
-        exists = exists.get("choice", exists.get("value"))
-        if exists is not True and str(exists).lower() not in {"true", "yes", "likely"}:
+        val = exists.get("choice", exists.get("value", exists.get("noul")))
+        if type(val) is bool:
+            is_present = val
+        elif isinstance(val, (int, float)):
+            is_present = val > 0.0
+        else:
+            is_present = str(val).lower() in {"true", "yes", "likely"}
+        if not is_present:
             decision.update(choice="BLOCKED", operation="BLOCKED", probabilities={"BLOCKED": 1.0})
         else:
             box = answers["target_box"]["box"]

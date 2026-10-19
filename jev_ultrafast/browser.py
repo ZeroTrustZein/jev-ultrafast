@@ -139,6 +139,12 @@ class Browser:
                 time.sleep(0.3)  # let the old document unload before polling readyState
         else:
             ensure_browser()
+            try:
+                info = json.loads(urllib.request.urlopen("http://127.0.0.1:9333/json/version", timeout=1).read())
+                if "webSocketDebuggerUrl" in info:
+                    os.environ["BU_CDP_WS"] = info["webSocketDebuggerUrl"]
+            except Exception:
+                pass
             ensure_daemon()
             self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
             self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]

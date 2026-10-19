@@ -1,19 +1,18 @@
 :root {
-  --bg: #080d18;
-  --surface: #101a2a;
-  --surface-2: #142238;
-  --surface-hover: #1b3049;
-  --border: #213652;
-  --border-bright: #2e4a6b;
-  --text: #e9f2fb;
-  --text-soft: #c1d0df;
-  --text-muted: #7890a8;
-  --primary: #22d3ee;
-  --primary-hover: #67e8f9;
-  --accent: #f6c453;
-  --success: #3ee6a8;
-  --danger: #ff6b7a;
-  --blue: #4f8cff;
+  --bg: #09090b;
+  --surface: #121215;
+  --surface-2: #18181b;
+  --surface-hover: #222227;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-bright: rgba(255, 255, 255, 0.16);
+  --text: #fafafa;
+  --text-soft: #a1a1aa;
+  --text-muted: #71717a;
+  --primary: #fafafa;
+  --accent: #10b981;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
 }
 
 * {
@@ -64,7 +63,7 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: linear-gradient(100deg, #0c1728 0%, #0a1322 68%, #101d31 100%);
+  background: rgba(9, 9, 11, 0.85); backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -100,8 +99,8 @@ html, body {
   gap: 5px;
   font-size: 10px;
   background-color: rgba(34, 211, 238, 0.09);
-  color: #76e8f3;
-  border: 1px solid rgba(34, 211, 238, 0.28);
+  color: #a1a1aa;
+  border: 1px solid rgba(255,255,255,.16);
   padding: 3px 7px;
   border-radius: 5px;
   font-weight: 600;
@@ -159,7 +158,7 @@ html, body {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: #0b1524;
+  background: #121215; border-radius: 8px; margin: 10px 12px 0;
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-muted);
@@ -261,7 +260,7 @@ html, body {
 .hero-pill {
   color: #84edf4;
   background: rgba(34, 211, 238, 0.1);
-  border: 1px solid rgba(34, 211, 238, 0.28);
+  border: 1px solid rgba(255,255,255,.16);
   padding: 4px 7px;
   border-radius: 4px;
 }
@@ -809,3 +808,11 @@ textarea#composer-input {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+
+/* Obsidian controls added for refreshed markup */
+.engine-badge { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:var(--text-muted); background:var(--surface-2); border:1px solid var(--border); padding:2px 7px; border-radius:5px; }
+.engine-indicator { width:5px; height:5px; border-radius:50%; background:var(--success); }
+.engine-ms { color:var(--text-soft); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.btn-svg { width:14px; height:14px; display:block; }
+.btn-primary-action { width:100%; padding:8px 12px; border-radius:7px; border:1px solid var(--border-bright); background:var(--text); color:var(--bg); font-size:12px; font-weight:600; cursor:pointer; }
+.btn-primary-action:hover { opacity:.9; }

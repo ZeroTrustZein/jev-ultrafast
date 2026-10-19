@@ -227,13 +227,11 @@ async function sendMessage() {
   currentTabId = tab.id;
   currentTabUrl = tab.url && tab.url !== "about:blank" ? tab.url : "";
   const isLocked = lockTabCb && lockTabCb.checked;
-  contextUrlEl.textContent = isLocked ? currentTabUrl : `📁 [Jev Agent] ${currentTabUrl || "about:blank"}`;
+  contextUrlEl.textContent = currentTabUrl || "about:blank";
 
   composerInput.value = "";
   composerInput.style.height = "auto";
   sendBtn.classList.remove("active");
-  if (welcomeCard) welcomeCard.style.display = "none";
-
   // Attach to agent tab before starting
   const attached = await chrome.runtime.sendMessage({ type: "attach", tabId: currentTabId });
   if (!attached || !attached.ok) {
@@ -251,7 +249,11 @@ async function sendMessage() {
       body: JSON.stringify({ message: text, files, url })
     });
     const data = await res.json();
-    if (!res.ok) alert(data.error || "Jev could not start this task");
+    if (!res.ok) {
+      alert(data.error || "Jev could not start this task");
+      return;
+    }
+    if (welcomeCard) welcomeCard.style.display = "none";
     attachedFiles = [];
     renderAttachments();
   } catch (err) {
@@ -365,7 +367,7 @@ async function pollChat() {
     if (thisSeq !== pollSeq) return;
 
     serverDot.className = "dot online";
-    serverText.textContent = "Online";
+    serverText.textContent = "Local · 99ms";
 
     // Toggle Send / Stop & increase poll frequency while running
     if (state.status === "running" || state.status === "thinking") {
@@ -404,6 +406,7 @@ async function pollChat() {
   } catch (_) {
     serverDot.className = "dot";
     serverText.textContent = "Offline";
+    if (!chatContainer.innerHTML.trim()) renderEmptyChat();
     nextDelay = 2000;
   }
   pollTimeout = setTimeout(pollChat, nextDelay);

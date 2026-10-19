@@ -124,6 +124,7 @@ train_env["STAGE"] = "2"
 train_env["LAYA_BASE"] = "laya-browser-vision"
 train_env["FP_DONE_W"] = "1.0"
 train_env["BOX_W"] = "1.5"
+train_env["LR_ENC"] = "1.5e-5"
 
 train_cmd = [
     str(laya_venv_python),

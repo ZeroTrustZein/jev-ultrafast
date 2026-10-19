@@ -312,98 +312,117 @@ class AssistBridge:
                         target_url, goal, profile=self.profile, approve=approve_callback, files=self.files
                     ) as agent:
                         self.active_agent = agent
-                        while agent.state["status"] not in {"done", "blocked"}:
-                            with self.lock:
-                                if self.generation != current_gen or self.session_id != current_sess_id:
-                                    break
-                            try:
-                                for state in agent.run():
+                        done_verifications = 0
+                        while True:
+                            while agent.state["status"] not in {"done", "blocked"}:
+                                with self.lock:
+                                    if self.generation != current_gen or self.session_id != current_sess_id:
+                                        break
+                                try:
+                                    for state in agent.run():
+                                        with self.lock:
+                                            if self.generation != current_gen or self.session_id != current_sess_id:
+                                                break
+                                        # Each tick yields state; log an action only the first time it appears,
+                                        # otherwise re-checks of the same page repeat the last action in the panel.
+                                        if state.get("history") and state["history"][-1].get("step") not in {
+                                            s.get("step") for s in asst_msg["steps"]
+                                        }:
+                                            last_h = state["history"][-1]
+                                            gear = last_h.get("gear", 1)
+                                            step_info = {
+                                                "step": last_h.get("step"),
+                                                "gear": gear,
+                                                "action": last_h.get("action"),
+                                                "kind": last_h.get("kind"),
+                                                "text": last_h.get("text"),
+                                                "time": time.strftime("%H:%M:%S"),
+                                            }
+                                            step_callback(step_info)
+                                except MissingValue as missing:
+                                    # Form needs user information
+                                    prompt_text = f"The form needs your **{missing.field}**. What should I enter?"
                                     with self.lock:
                                         if self.generation != current_gen or self.session_id != current_sess_id:
                                             break
-                                    # Each tick yields state; log an action only the first time it appears,
-                                    # otherwise re-checks of the same page repeat the last action in the panel.
-                                    if state.get("history") and state["history"][-1].get("step") not in {
-                                        s.get("step") for s in asst_msg["steps"]
-                                    }:
-                                        last_h = state["history"][-1]
-                                        gear = last_h.get("gear", 1)
-                                        step_info = {
-                                            "step": last_h.get("step"),
-                                            "gear": gear,
-                                            "action": last_h.get("action"),
-                                            "kind": last_h.get("kind"),
-                                            "text": last_h.get("text"),
-                                            "time": time.strftime("%H:%M:%S"),
+                                        self.status = "waiting_user"
+                                        ask_msg = {
+                                            "id": self.msg_counter,
+                                            "role": "assistant",
+                                            "content": f"⏸️ {prompt_text}",
+                                            "time": time.strftime("%H:%M"),
+                                            "missing_field": missing.field,
                                         }
-                                        step_callback(step_info)
-                            except MissingValue as missing:
-                                # Form needs user information
-                                prompt_text = f"The form needs your **{missing.field}**. What should I enter?"
-                                with self.lock:
-                                    if self.generation != current_gen or self.session_id != current_sess_id:
-                                        break
-                                    self.status = "waiting_user"
-                                    ask_msg = {
-                                        "id": self.msg_counter,
-                                        "role": "assistant",
-                                        "content": f"⏸️ {prompt_text}",
-                                        "time": time.strftime("%H:%M"),
-                                        "missing_field": missing.field,
-                                    }
-                                    self.msg_counter += 1
-                                    self.messages.append(ask_msg)
-                                    self._save_session()
-                                    self.pending_event.clear()
-                                    self.user_input_response = None
+                                        self.msg_counter += 1
+                                        self.messages.append(ask_msg)
+                                        self._save_session()
+                                        self.pending_event.clear()
+                                        self.user_input_response = None
 
-                                # Wait for user to chat back with the missing answer
-                                self.pending_event.wait(timeout=300)
-                                with self.lock:
-                                    if self.generation != current_gen or self.session_id != current_sess_id:
-                                        break
-                                    ans = self.user_input_response or ""
-                                    field_key = missing.field.lower().replace("-", "_").replace(" ", "_")
-                                    self.profile[missing.field] = ans
-                                    self.profile[field_key] = ans
-                                    agent.profile[missing.field] = ans
-                                    agent.profile[field_key] = ans
-                                    normalize_profile_aliases(self.profile)
-                                    normalize_profile_aliases(agent.profile)
-                                    agent.state["goal"] += f"\nUser provided {missing.field}: {ans}"
-                                    self.status = "running"
+                                    # Wait for user to chat back with the missing answer
+                                    self.pending_event.wait(timeout=300)
+                                    with self.lock:
+                                        if self.generation != current_gen or self.session_id != current_sess_id:
+                                            break
+                                        ans = self.user_input_response or ""
+                                        field_key = missing.field.lower().replace("-", "_").replace(" ", "_")
+                                        self.profile[missing.field] = ans
+                                        self.profile[field_key] = ans
+                                        agent.profile[missing.field] = ans
+                                        agent.profile[field_key] = ans
+                                        normalize_profile_aliases(self.profile)
+                                        normalize_profile_aliases(agent.profile)
+                                        agent.state["goal"] += f"\nUser provided {missing.field}: {ans}"
+                                        self.status = "running"
 
-                        final_page = agent.state["page"]
-                        with self.lock:
-                            if self.generation != current_gen or self.session_id != current_sess_id:
-                                return
-                            self.current_url = final_page.get("url")
-                            if agent.state["status"] == "done":
-                                from .chat_agent import synthesize_outcome
+                            final_page = agent.state["page"]
+                            with self.lock:
+                                if self.generation != current_gen or self.session_id != current_sess_id:
+                                    return
+                                self.current_url = final_page.get("url")
+                                if agent.state["status"] == "done":
+                                    from .chat_agent import synthesize_outcome
 
-                                summary = synthesize_outcome(agent.state["goal"], final_page)
-                                asst_msg["content"] += (
-                                    f"\n\n✅ **Completed!** Finished on page: [{final_page.get('title')}]"
-                                    f"({final_page.get('url')})\n\n{summary}"
-                                )
-                            elif agent.state["status"] == "blocked":
-                                reason = agent.state.get("denied")
-                                if reason:
-                                    msg = f"\n\n⛔ **Stopped:** Sensitive action '{reason}' was not approved."
-                                elif len(agent.state.get("history", [])) >= MAX_STEPS:
-                                    msg = f"\n\n⛔ **Stopped:** Reached maximum action limit ({MAX_STEPS} steps)."
-                                else:
-                                    last_dec = (agent.state.get("decisions") or [{}])[-1]
-                                    specific_reason = last_dec.get("reason")
-                                    if specific_reason:
-                                        msg = f"\n\n⚠️ **Paused/Blocked:** {specific_reason}"
-                                    else:
-                                        msg = (
-                                            f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
-                                            f"[{final_page.get('title')}]({final_page.get('url')}). "
-                                            "Check if a CAPTCHA, login, or manual action is required."
+                                    outcome = synthesize_outcome(agent.state["goal"], final_page)
+                                    is_done = outcome.get("completed", True) if isinstance(outcome, dict) else True
+                                    summary = outcome.get("summary", outcome) if isinstance(outcome, dict) else str(outcome)
+
+                                    # Prevent false-positive early DONE (e.g. stopping prematurely on homepage)
+                                    if not is_done and len(agent.state.get("history", [])) < MAX_STEPS and done_verifications < 2:
+                                        done_verifications += 1
+                                        agent.state["status"] = "ready"
+                                        agent.state["goal"] += (
+                                            f"\nCRITICAL: Goal is NOT yet satisfied on {final_page.get('url')}. "
+                                            f"Status: {summary}. "
+                                            "Do NOT select DONE on a generic homepage or search listing; navigate to the specific target page."
                                         )
-                                asst_msg["content"] += msg
+                                        continue
+
+                                    prefix = "✅ **Completed!**" if is_done else "⏸️ **Incomplete/Paused:**"
+                                    asst_msg["content"] += (
+                                        f"\n\n{prefix} Finished on page: [{final_page.get('title')}]"
+                                        f"({final_page.get('url')})\n\n{summary}"
+                                    )
+                                    break
+                                elif agent.state["status"] == "blocked":
+                                    reason = agent.state.get("denied")
+                                    if reason:
+                                        msg = f"\n\n⛔ **Stopped:** Sensitive action '{reason}' was not approved."
+                                    elif len(agent.state.get("history", [])) >= MAX_STEPS:
+                                        msg = f"\n\n⛔ **Stopped:** Reached maximum action limit ({MAX_STEPS} steps)."
+                                    else:
+                                        last_dec = (agent.state.get("decisions") or [{}])[-1]
+                                        specific_reason = last_dec.get("reason")
+                                        if specific_reason:
+                                            msg = f"\n\n⚠️ **Paused/Blocked:** {specific_reason}"
+                                        else:
+                                            msg = (
+                                                f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
+                                                f"[{final_page.get('title')}]({final_page.get('url')}). "
+                                                "Check if a CAPTCHA, login, or manual action is required."
+                                            )
+                                    asst_msg["content"] += msg
+                                    break
 
                 with self.lock:
                     if self.generation == current_gen and self.session_id == current_sess_id:

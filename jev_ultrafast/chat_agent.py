@@ -30,6 +30,11 @@ CURRENT ACTIVE TAB & URL HANDLING (CRITICAL):
   * NEVER hallucinate unrelated websites, "timetable portal", or generic forms. Base your plan on the active tab.
   * If CURRENT ACTIVE TAB is a Wikipedia article or edit page, you are editing that exact Wikipedia page.
 
+DIRECT CHANNELS, PROFILES & SEARCH DESTINATIONS (CRITICAL):
+- When the user asks to check, open, or view a specific channel, user, profile, or search item on YouTube, GitHub, Reddit, etc.:
+  * Set "start_url" to the direct channel/profile URL if standard (e.g. "https://www.youtube.com/@Caedrel" or "https://www.youtube.com/results?search_query=Caedrel") rather than a generic homepage.
+  * In "goal", explicitly state: "Navigate to the specific channel/profile page, confirm the channel title and videos are open, and do not stop until on the actual channel page."
+
 PAGE EDITING & INSERTING ENTRIES (CRITICAL):
 - When the user asks to add or insert an entry into an open page, list, document, or wiki:
   * "action_required" MUST be true.
@@ -135,18 +140,19 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
     return json_content(result)
 
 
-SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent reached the final page for the user's goal.
-Read the page title, URL, and visible text to provide a concise, high-value summary of what was found or completed.
-Key instructions:
-- If showtimes or tickets found: specify theater, date/time, and format (note that OV means English Original Version).
-- If an application/form was processed: summarize the fields filled and the current status.
-- State the immediate next action available (e.g. 'Click ExpressTicket to select seats', or 'Form ready for review').
-Format as 2-4 clean markdown bullet points. Keep it under 100 words. No fluff."""
+SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent ran on a page pursuing the user's goal.
+Evaluate visible evidence (page title, URL, visible text) against the USER GOAL.
+Return JSON:
+{
+  "completed": true/false (true ONLY if the goal is visibly satisfied; false if stopped on a generic homepage, search listing, or intermediate page),
+  "summary": "2-4 clean markdown bullet points of what was reached or found, what remains to be done, and immediate next action. Under 100 words. No fluff."
+}"""
 
 
 def synthesize_outcome(goal, page):
+    fallback_summary = f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})" if page else "Done"
     if not page or not page.get("text"):
-        return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
+        return {"completed": True, "summary": fallback_summary}
     base = (
         os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")
     ).rstrip("/")
@@ -167,14 +173,18 @@ def synthesize_outcome(goal, page):
                 "model": model,
                 "max_tokens": 300,
                 "reasoning_effort": "low",
+                "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": SYNTHESIS_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
             },
         )
-        msg = (res.get("choices") or [{}])[0].get("message", {})
-        content = msg.get("content") or ""
-        return content.strip()
+        data = json_content(res)
+        if isinstance(data, dict):
+            comp = data.get("completed", True)
+            summ = data.get("summary") or fallback_summary
+            return {"completed": bool(comp), "summary": str(summ).strip()}
+        return {"completed": True, "summary": str(data).strip()}
     except Exception:
-        return f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})"
+        return {"completed": True, "summary": fallback_summary}

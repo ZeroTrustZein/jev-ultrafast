@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Jev Assist · AI Browser Co-Pilot</title>
+  <title>Vision-Laya · Autonomous Browser Agent</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
@@ -10,38 +10,81 @@
   <!-- Header -->
   <header class="header">
     <div class="brand">
-      <span class="bolt">⚡</span>
-      <span class="brand-name">Jev Assist</span>
-      <span class="model-badge">Vision-Laya 99ms</span>
+      <div class="logo-mark">
+        <svg viewBox="0 0 20 20" fill="none" class="icon-svg">
+          <path d="M11.5 2L4 11h6l-1.5 7L16 9h-6l1.5-7z" fill="url(#brand-grad)" stroke="#22d3ee" stroke-width="0.75" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="brand-grad" x1="4" y1="2" x2="16" y2="18" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#06b6d4"/>
+              <stop offset="1" stop-color="#3b82f6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <span class="brand-name">Vision-Laya</span>
+      <span class="model-badge">
+        <span class="badge-dot"></span>
+        <span>Local 99ms</span>
+      </span>
     </div>
+
     <div class="header-actions">
-      <button id="history-btn" class="icon-btn" title="View past sessions">📜</button>
-      <button id="reset-btn" class="icon-btn" title="Start new conversation">🔄</button>
+      <button id="history-btn" class="icon-btn" title="Session History" aria-label="Session History">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" class="icon-svg">
+          <circle cx="10" cy="10" r="7"/>
+          <path d="M10 6v4l2.5 2.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button id="reset-btn" class="icon-btn" title="New Session" aria-label="New Session">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" class="icon-svg">
+          <path d="M4 10a6 6 0 101.5-3.9M4 5v3h3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <div class="status-indicator" id="status-indicator" title="Backend Server Status">
         <span class="dot" id="server-dot"></span>
-        <span id="server-text">Online</span>
+        <span class="status-label" id="server-text">Online</span>
       </div>
     </div>
   </header>
 
   <!-- Active Context Bar -->
   <div class="context-bar">
-    <span class="context-icon">🌐</span>
-    <span class="context-url" id="context-url" title="Current tab">Detecting active tab...</span>
-    <label class="lock-tab-label" title="Lock agent strictly to current active tab instead of dedicated [Jev Agent] tab group">
-      <input type="checkbox" id="lock-tab-cb"> Lock tab
+    <div class="context-pill">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" class="context-svg">
+        <circle cx="8" cy="8" r="6"/>
+        <path d="M2 8h12M8 2a10 10 0 010 12M8 2a10 10 0 000 12"/>
+      </svg>
+      <span class="context-url" id="context-url" title="Current tab">Detecting active tab...</span>
+    </div>
+    <label class="lock-tab-label" title="Lock agent strictly to current active tab">
+      <input type="checkbox" id="lock-tab-cb">
+      <span class="custom-toggle"></span>
+      <span class="lock-text">Lock tab</span>
     </label>
   </div>
 
   <!-- Chat Messages Container -->
   <main class="chat-container" id="chat-container">
     <div class="welcome-card" id="welcome-card">
-      <div class="welcome-title">Describe a task, Jev will complete it.</div>
-      <div class="welcome-desc">Automates web portals, fills applications, uploads docs, and asks you for details when needed.</div>
+      <div class="hero-badge">
+        <span class="hero-pill">420M Multimodal</span>
+        <span class="hero-sub">RTX 4070 Ti Local</span>
+      </div>
+      <div class="welcome-title">Autonomous Visual Browser Co-Pilot</div>
+      <div class="welcome-desc">Executes complex web actions via dual-gear policy: System-1 DOM actions in 75ms with instant System-2 visual fallback in 99ms. Zero cloud cost.</div>
       <div class="chips-row">
-        <button class="chip" data-prompt="i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me stop and ask me if u need anything">🇩🇪 Renew Leipzig Permit</button>
-        <button class="chip" data-prompt="Fill out this application for a tourist visa. Ask me for any personal details you need.">🛂 Fill Visa Application</button>
-        <button class="chip" data-prompt="Find and open the Wikipedia article about Alan Turing.">📖 Wikipedia Search</button>
+        <button class="chip" data-prompt="Find and open the Wikipedia article about Alan Turing, then click on the Early computing section.">
+          <span class="chip-title">Wikipedia Research</span>
+          <span class="chip-desc">Navigate & read technical articles</span>
+        </button>
+        <button class="chip" data-prompt="Go to news.ycombinator.com, find the first story about AI or machine learning, and open its comments thread.">
+          <span class="chip-title">Hacker News Thread</span>
+          <span class="chip-desc">Find story & inspect discussion</span>
+        </button>
+        <button class="chip" data-prompt="i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me stop and ask me if u need anything">
+          <span class="chip-title">Document & Permit Form</span>
+          <span class="chip-desc">Fill applications & request details</span>
+        </button>
       </div>
     </div>
   </main>
@@ -50,34 +93,51 @@
   <div class="history-overlay" id="history-overlay" style="display:none;">
     <div class="history-panel">
       <div class="history-top">
-        <span class="history-title">Chat History</span>
-        <button id="history-close-btn" class="icon-btn" title="Close history">×</button>
+        <span class="history-title">Session History</span>
+        <button id="history-close-btn" class="icon-btn close-btn" title="Close history" aria-label="Close">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" class="icon-svg">
+            <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/>
+          </svg>
+        </button>
       </div>
       <div class="history-list" id="history-list"></div>
       <div class="history-bottom">
-        <button id="new-chat-btn" class="btn-small allow" style="width:100%;padding:8px 12px;cursor:pointer;">+ New Conversation</button>
+        <button id="new-chat-btn" class="btn-primary-action">+ New Conversation</button>
       </div>
     </div>
   </div>
 
   <!-- Bottom Composer -->
   <footer class="composer-container">
-    <!-- Attachment chip list -->
     <div class="attachments-list" id="attachments-list"></div>
 
     <div class="composer-box">
-      <textarea id="composer-input" rows="1" placeholder="Describe a task, Jev AI will complete it..."></textarea>
+      <textarea id="composer-input" rows="1" placeholder="Instruct Vision-Laya (e.g. Navigate, fill form, hit-test coordinates)..."></textarea>
       <div class="composer-toolbar">
         <div class="toolbar-left">
-          <label class="tool-btn" title="Attach Document or PDF">
-            📎
+          <label class="tool-btn" title="Attach Document or PDF" aria-label="Attach File">
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" class="icon-svg">
+              <path d="M14.5 9.5l-6 6a4 4 0 01-5.6-5.6l6-6a2.6 2.6 0 013.7 3.7l-6 6a1.2 1.2 0 01-1.7-1.7l5.5-5.5" stroke-linecap="round"/>
+            </svg>
             <input type="file" id="file-picker" multiple style="display:none;">
           </label>
-          <span class="engine-tag">⚡ Agent (Vision-Laya 99ms)</span>
+          <div class="engine-badge">
+            <span class="engine-indicator"></span>
+            <span>Vision-Laya</span>
+            <span class="engine-ms">99ms</span>
+          </div>
         </div>
         <div class="toolbar-right">
-          <button id="stop-btn" class="send-btn stop" style="display:none;" title="Stop agent">⏹</button>
-          <button id="send-btn" class="send-btn" title="Send message">↑</button>
+          <button id="stop-btn" class="send-btn stop" style="display:none;" title="Stop agent" aria-label="Stop">
+            <svg viewBox="0 0 16 16" fill="currentColor" class="btn-svg">
+              <rect x="4" y="4" width="8" height="8" rx="1.5"/>
+            </svg>
+          </button>
+          <button id="send-btn" class="send-btn" title="Send message" aria-label="Send">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" class="btn-svg">
+              <path d="M8 12V4M4 7l4-4 4 4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>

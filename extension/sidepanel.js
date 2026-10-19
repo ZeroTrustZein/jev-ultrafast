@@ -414,12 +414,25 @@ function renderEmptyChat() {
   lastRendered = "EMPTY";
   chatContainer.innerHTML = `
     <div class="welcome-card" id="welcome-card">
-      <div class="welcome-title">Describe a task, Jev will complete it.</div>
-      <div class="welcome-desc">Automates web portals, fills applications, uploads docs, and asks you for details when needed.</div>
+      <div class="hero-badge">
+        <span class="hero-pill">420M Multimodal</span>
+        <span class="hero-sub">RTX 4070 Ti Local</span>
+      </div>
+      <div class="welcome-title">Autonomous Visual Browser Co-Pilot</div>
+      <div class="welcome-desc">Executes complex web actions via dual-gear policy: System-1 DOM actions in 75ms with instant System-2 visual fallback in 99ms. Zero cloud cost.</div>
       <div class="chips-row">
-        <button class="chip" data-prompt="i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me stop and ask me if u need anything">🇩🇪 Renew Leipzig Permit</button>
-        <button class="chip" data-prompt="Fill out this application for a tourist visa. Ask me for any personal details you need.">🛂 Fill Visa Application</button>
-        <button class="chip" data-prompt="Find and open the Wikipedia article about Alan Turing.">📖 Wikipedia Search</button>
+        <button class="chip" data-prompt="Find and open the Wikipedia article about Alan Turing, then click on the Early computing section.">
+          <span class="chip-title">Wikipedia Research</span>
+          <span class="chip-desc">Navigate & read technical articles</span>
+        </button>
+        <button class="chip" data-prompt="Go to news.ycombinator.com, find the first story about AI or machine learning, and open its comments thread.">
+          <span class="chip-title">Hacker News Thread</span>
+          <span class="chip-desc">Find story & inspect discussion</span>
+        </button>
+        <button class="chip" data-prompt="i am a student in leipzig i wanna renew my residence permit please go to the form fill it for me stop and ask me if u need anything">
+          <span class="chip-title">Document & Permit Form</span>
+          <span class="chip-desc">Fill applications & request details</span>
+        </button>
       </div>
     </div>
   `;

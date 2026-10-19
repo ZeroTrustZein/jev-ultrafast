@@ -73,8 +73,15 @@ with batch_file.open("w", encoding="utf-8") as f:
 
 print(f"Selected {len(next_tasks)} new tasks for this iteration -> {batch_file}")
 
+# Check if recent runs failed with HTTP 402 (credit limit)
+recent_lines = runs_file.read_text(encoding="utf-8").splitlines()[-10:] if runs_file.exists() else []
+is_402 = any("HTTP 402" in l for l in recent_lines)
+if is_402:
+    print("TypeSafe credit limit reached (HTTP 402). Focusing on local multi-epoch fine-tuning & optimization.")
+    next_tasks = []
+
 # 2. Run collection on the new batch
-if next_tasks:
+if next_tasks and not is_402:
     print("Collecting teacher decisions from Jev 1.14...")
     cmd = [
         sys.executable,
@@ -115,6 +122,7 @@ train_env = dict(os.environ)
 train_env["VISION"] = "1"
 train_env["STAGE"] = "2"
 train_env["LAYA_BASE"] = "laya-browser-vision"
+train_env["FP_DONE_W"] = "1.0"
 
 train_cmd = [
     str(laya_venv_python),

@@ -7,6 +7,19 @@ TYPESAFE_BASE_URL=http://127.0.0.1:8791 uv run --env-file .env python scripts/ev
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+env_path = Path(".env")
+if env_path.exists():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 
 from jev_ultrafast import Agent
 from jev_ultrafast.model import json_content, post_json
@@ -18,7 +31,7 @@ parser.add_argument("--arm", required=True)
 parser.add_argument("--out", default="artifacts/eval.jsonl")
 parser.add_argument("--max-actions", type=int, default=20)
 args = parser.parse_args()
-base = os.environ["TEXT_MODEL_BASE_URL"].rstrip("/")
+base = os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128").rstrip("/")
 
 
 def judge(goal, page):

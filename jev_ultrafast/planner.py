@@ -163,9 +163,13 @@ def ensure_local_server(port=8791):
         if not py.exists():
             py = Path(sys.executable)
         server_script = laya_dir / "laya-browser" / "laya_browser.py"
-        model_dir = laya_dir / "laya-browser-distilled"
+        model_dir = laya_dir / "laya-browser-vision"
+        if not model_dir.exists():
+            model_dir = laya_dir / "laya-browser-distilled"
         if not model_dir.exists():
             model_dir = laya_dir / "laya-browser"
+        os.environ.setdefault("GEAR2_BACKEND", "laya")
+        os.environ.setdefault("GEAR2_LAYA_URL", base)
         if server_script.exists():
             import subprocess
 

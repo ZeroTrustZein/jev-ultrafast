@@ -163,7 +163,7 @@ def synthesize_outcome(goal, page):
         f"USER GOAL: {goal}\n"
         f"FINAL PAGE TITLE: {page.get('title', '')}\n"
         f"FINAL PAGE URL: {page.get('url', '')}\n"
-        f"PAGE TEXT CONTENT:\n{page.get('text', '')[:4000]}"
+        f"PAGE TEXT CONTENT:\n{page.get('text', '')[:12000]}"
     )
     try:
         res = post_json(

@@ -155,9 +155,10 @@ for line in train_out:
     if "temperature" in line.lower():
         temp_str = line.split(":")[-1].strip()
 
-import torch
-items_pt = out_vision / "train_items.pt"
-item_count = len(torch.load(items_pt, weights_only=False)) if items_pt.exists() else 0
+item_count = 0
+m = re.search(r"Built (\d+) training items", p_conv.stdout)
+if m:
+    item_count = int(m.group(1))
 
 row = f"| {datetime.now().strftime('%H:%M:%S')} | {total_runs} | {img_count} | {item_count:,} | 2 | {train_time}s | {temp_str} | {latency_ms} | SUCCESS |\n"
 with leaderboard.open("a", encoding="utf-8") as f:

@@ -123,20 +123,19 @@ def chat_turn(conversation_history, profile, current_url=None, files=()):
         except Exception as exc:  # a corrupt or exotic file must never abort the whole task
             parts.append({"type": "text", "text": f"Document {Path(f).name}: could not be read ({exc})"})
 
-    result = post_json(
-        base + "/chat/completions",
-        key,
-        {
-            "model": model,
-            "max_tokens": 512,
-            "reasoning_effort": "low",
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": CHAT_SYSTEM},
-                {"role": "user", "content": parts},
-            ],
-        },
-    )
+    body = {
+        "model": model,
+        "max_tokens": 512,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": CHAT_SYSTEM},
+            {"role": "user", "content": parts},
+        ],
+    }
+    if "odysseus" in model or "r1" in model or "o3" in model or "o1" in model:
+        body["reasoning_effort"] = "low"
+
+    result = post_json(base + "/chat/completions", key, body)
     return json_content(result)
 
 
@@ -166,20 +165,19 @@ def synthesize_outcome(goal, page):
         f"PAGE TEXT CONTENT:\n{page.get('text', '')[:12000]}"
     )
     try:
-        res = post_json(
-            base + "/chat/completions",
-            key,
-            {
-                "model": model,
-                "max_tokens": 300,
-                "reasoning_effort": "low",
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": SYNTHESIS_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-        )
+        synth_body = {
+            "model": model,
+            "max_tokens": 300,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYNTHESIS_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        if "odysseus" in model or "r1" in model or "o3" in model or "o1" in model:
+            synth_body["reasoning_effort"] = "low"
+
+        res = post_json(base + "/chat/completions", key, synth_body)
         data = json_content(res)
         if isinstance(data, dict):
             comp = data.get("completed", True)

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Jev Assist · AI Browser Co-Pilot",
-  "version": "1.2.0",
-  "description": "Drive Brave or Chrome with local distilled Laya (75ms) + Vision fallback. Interactive chat, document checklists, and live execution steps.",
+  "name": "Vision-Laya · AI Browser Co-Pilot",
+  "version": "1.3.0",
+  "description": "Universal Visual Browser Agent with Vision-Laya (99ms) & multi-frame OOPIF perception. Interactive chat, canvas hit-testing, and live execution steps.",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

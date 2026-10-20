@@ -7,14 +7,18 @@
   };
   for (const [id,e] of cache.nodes) if (!e.isConnected) cache.nodes.delete(id);
   const safe = e => !['password','hidden'].includes(e.type);
-  // Same-origin iframes and open shadow roots are part of the page; cross-origin frames stay opaque.
+  // Same-origin iframes, open shadow roots, and slot assignments are part of the page.
   const deepAll = selector => {
     const out=[];
     const visit=root=>{
+      if (!root) return;
       out.push(...root.querySelectorAll(selector));
       const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT); let el;
       while ((el=walker.nextNode())) {
         if (el.shadowRoot) visit(el.shadowRoot);
+        if (el.tagName==='SLOT' && typeof el.assignedElements==='function') {
+          for (const assigned of el.assignedElements()) visit(assigned);
+        }
         if (el.tagName==='IFRAME') { let d=null; try { d=el.contentDocument; } catch (_) {} if (d?.body) visit(d); }
       }
     };
@@ -37,22 +41,32 @@
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
       .map(id=>name(byId(e,id),seen)).filter(Boolean).join(' ');
-    return referenced || e.getAttribute('aria-label') ||
+    const childText=(e.tagName==='INPUT'||e.tagName==='TEXTAREA'?'':[...e.childNodes].map(n=>n.nodeType===3?n.textContent:
+      n.nodeType===1&&n.getAttribute('aria-hidden')!=='true'?name(n,seen):'').join(' ').trim());
+    const fnMatch=(e.getAttribute('onclick')||'').match(/(?:select|click|open|remove|delete|add|trash|download|copy)\(['"]([^'"]+)['"]\)/i);
+    const fnHint=fnMatch?fnMatch[1]:'';
+    const svgEl=e.querySelector?e.querySelector('svg'):null;
+    const svgHint=svgEl?(svgEl.getAttribute('aria-label')||svgEl.getAttribute('data-testid')||svgEl.querySelector('title')?.textContent||''):'';
+    const attrHint=e.getAttribute('data-testid')||e.getAttribute('name')||e.getAttribute('id')||'';
+    const classStr = typeof e.className === 'string' ? e.className : (e.getAttribute('class') || '');
+    const statusMatch = classStr.split(/\s+/).filter(c => ['free','available','occupied','taken','active','selected','open','closed','disabled','primary','danger','success'].includes(c.toLowerCase())).join(' ');
+    const statusSuffix = statusMatch ? ' [' + statusMatch + ']' : '';
+    const baseName = referenced || e.getAttribute('aria-label') ||
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName==='TEXTAREA' ? (e.getAttribute('placeholder') || e.getAttribute('title') || e.id || e.name || 'Wikitext editor') : '') ||
-      (e.tagName==='INPUT' || e.tagName==='TEXTAREA' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
-        n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
-      e.getAttribute('title') || e.getAttribute('placeholder') || '';
+      childText || e.getAttribute('title') || e.getAttribute('placeholder') || fnHint || svgHint || (attrHint && !attrHint.startsWith('__') ? attrHint : '');
+    return baseName ? (baseName + statusSuffix).trim() : '';
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
-    'option','gridcell','combobox','textbox','searchbox','spinbutton'];
-  const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
+    'option','gridcell','combobox','textbox','searchbox','spinbutton','treeitem','listitem'];
+  const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],[tabindex="0"],svg [onclick],svg .region,canvas,'+
     roles.map(role=>'[role="'+role+'"]').join(',');
   const role = e => {
     const explicit=e.getAttribute('role');
     if (roles.includes(explicit)) return explicit;
-    if (e.tagName==='BUTTON' || e.tagName==='SUMMARY') return 'button';
+    if (e.tagName==='BUTTON' || e.tagName==='SUMMARY' || e.tagName==='CANVAS') return 'button';
+    if (e.ownerSVGElement || ['path','polygon','circle','rect'].includes(e.tagName)) return 'button';
     if (e.tagName==='A') return 'link';
     if (e.tagName==='SELECT') return 'combobox';
     if (e.tagName==='TEXTAREA' || e.isContentEditable) return 'textbox';
@@ -63,6 +77,7 @@
       if (e.type==='number') return 'spinbutton';
       if (['text','email','url','tel'].includes(e.type)) return 'textbox';
     }
+    if (e.getAttribute('tabindex')==='0') return 'button';
     return null;
   };
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
@@ -97,6 +112,53 @@
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.w,h:r.h}};
+    if (e.tagName==='CANVAS') {
+      try {
+        const ctx=e.getContext('2d');
+        if (ctx && e.width>20 && e.height>20) {
+          const imgData=ctx.getImageData(0,0,e.width,e.height);
+          const data=imgData.data;
+          const colors={
+            'Red shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>r>170&&g<110&&b<110},
+            'Blue shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>b>170&&r<110},
+            'Green shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>g>140&&r<110&&b<110},
+            'Yellow shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>r>170&&g>140&&b<110},
+            'Purple shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>r>120&&b>160&&g<100},
+            'Coral shape': {count:0,sumX:0,sumY:0,match:(r,g,b)=>r>210&&g>90&&g<140&&b<130},
+          };
+          for (let py=0; py<e.height; py+=3) {
+            for (let px=0; px<e.width; px+=3) {
+              const idx=(py*e.width+px)*4;
+              const red=data[idx],grn=data[idx+1],blu=data[idx+2],a=data[idx+3];
+              if (a<50) continue;
+              for (const [colName,cObj] of Object.entries(colors)) {
+                if (cObj.match(red,grn,blu)) {
+                  cObj.count++; cObj.sumX+=px; cObj.sumY+=py; break;
+                }
+              }
+            }
+          }
+          for (const [colName,cObj] of Object.entries(colors)) {
+            if (cObj.count>15) {
+              const cx=Math.round(r.x+cObj.sumX/cObj.count);
+              const cy=Math.round(r.y+cObj.sumY/cObj.count);
+              const shapeNode = cache.next++;
+              cache.nodes.set(shapeNode, e);
+              actions.push({
+                ...base,
+                node: shapeNode,
+                kind:'coords',
+                label:colName+' on canvas',
+                x:cx,
+                y:cy,
+                rect:{x:cx-15,y:cy-15,w:30,h:30}
+              });
+            }
+          }
+        }
+      } catch (_) {}
+      continue;
+    }
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
       if (value!==null) base[key]=value;
@@ -127,6 +189,25 @@
     }
   }
   const text=words.join('\n').slice(0,16000), height=document.documentElement.scrollHeight;
+  const scrollable_containers=[], sticky_headers=[];
+  for (const el of deepAll('div,section,main,article,aside,nav,header,ul,table')) {
+    if (!visible(el)) continue;
+    const style=window.getComputedStyle(el);
+    const oy=style.overflowY;
+    if ((oy==='auto'||oy==='scroll'||oy==='overlay') && el.scrollHeight>el.clientHeight+4) {
+      const r=cache.box(el);
+      if (r.w>40 && r.h>40) {
+        scrollable_containers.push({node:identity(el),x:r.x,y:r.y,w:r.w,h:r.h,scroll_y:el.scrollTop,scroll_height:el.scrollHeight});
+      }
+    }
+    const pos=style.position;
+    if (pos==='fixed'||pos==='sticky') {
+      const r=cache.box(el);
+      if (r.w>100 && r.h>20) {
+        sticky_headers.push({x:r.x,y:r.y,w:r.w,h:r.h});
+      }
+    }
+  }
   const page_key=cache.pageKey(), guards={};
   for (const a of actions) if (!(a.node in guards)) guards[a.node]=cache.guard(cache.nodes.get(a.node));
   // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
@@ -139,6 +220,7 @@
   if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
   if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
-  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+  const has_iframes = Boolean(document.querySelector('iframe'));
+  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,has_iframes,
+    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions,scrollable_containers,sticky_headers};
 })()

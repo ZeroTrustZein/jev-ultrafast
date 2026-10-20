@@ -114,7 +114,7 @@ class Agent:
                 else:
                     raise
 
-            # 2-Gear Hybrid Switch: Wake up Gear 2 (Multimodal VLM) if Gear 1 is low-confidence, blocked, or looping
+            # 2-Gear Hybrid Switch: Wake up Gear 2 (Multimodal VLM) if Gear 1 is low-confidence, blocked, looping, or premature DONE
             low_conf = state["decision"].get("confidence", 1.0) < float(
                 os.environ.get("GEAR2_CONFIDENCE_THRESHOLD", "0.65")
             )
@@ -122,11 +122,13 @@ class Agent:
             is_looping = len(state["history"]) >= 2 and all(
                 h.get("page_changed") is False and h.get("kind") != "wait" for h in state["history"][-2:]
             )
-            if gear2_on and state["decision"].get("gear") != 2 and (low_conf or is_blocked or is_looping):
+            has_action_goal = any(w in state["goal"].lower() for w in ("click", "select", "press", "open", "type", "fill", "register", "download", "remove", "add", "pick"))
+            premature_done = state["decision"].get("choice") == "DONE" and len(state["history"]) == 0 and has_action_goal
+            if gear2_on and state["decision"].get("gear") != 2 and (low_conf or is_blocked or is_looping or premature_done):
                 trigger_reason = (
-                    "looping with no change"
-                    if is_looping
-                    else ("low confidence" if low_conf else "gear 1 chose BLOCKED")
+                    "premature DONE before any action"
+                    if premature_done
+                    else ("looping with no change" if is_looping else ("low confidence" if low_conf else "gear 1 chose BLOCKED"))
                 )
                 try:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
@@ -154,9 +156,6 @@ class Agent:
             state["decision"] = None
             selected = decision["choice"]
             if selected in {"DONE", "BLOCKED"}:
-                if not state["browser"].fresh(page):
-                    state["status"] = "ready"
-                    raise StalePage("Page changed since the decision. Choose again.")
                 state["status"] = "done" if selected == "DONE" else "blocked"
                 state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)

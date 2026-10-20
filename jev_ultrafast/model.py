@@ -111,7 +111,7 @@ def teacher_log(entry, page, targets, screenshot, shot=None):
 def action_space(actions):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
-    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT", "upload": "UPLOAD"}
+    operations = {"click": "CLICK", "coords": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT", "upload": "UPLOAD"}
     for action in actions:
         kind = action["kind"]
         if kind not in operations:
@@ -141,8 +141,23 @@ def action_space(actions):
     return elements, targets, controls
 
 
+def is_unrequested_search(action, goal):
+    lbl = (action.get("label") or "").lower()
+    r = (action.get("role") or "").lower()
+    is_search = r == "searchbox" or any(w in lbl for w in ("search", "filter", "find", "jump to", "g+/"))
+    if not is_search:
+        return False
+    g = (goal or "").lower()
+    has_search_intent = any(w in g for w in ("search", "find", "query", "filter", "type", "enter", "input", "write", "fill"))
+    return not has_search_intent
+
+
 def systemone_request(state, goal, history):
     elements, targets, controls = action_space(state["actions"])
+    if "TYPE_TEXT" in targets:
+        non_search = {idx: a for idx, a in targets["TYPE_TEXT"].items() if not is_unrequested_search(a, goal)}
+        if non_search:
+            targets["TYPE_TEXT"] = non_search
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
         "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
@@ -156,6 +171,29 @@ def systemone_request(state, goal, history):
         "operation": {"type": "choice", "criteria": operations, "instructions": {"goal": goal, "rules": NEXT_ACTION}}
     }
     for operation, candidates in targets.items():
+        # Mask unrequested search inputs from candidates if non-search candidates exist
+        if operation == "TYPE_TEXT":
+            non_search = {idx: a for idx, a in candidates.items() if not is_unrequested_search(a, goal)}
+            if non_search:
+                candidates = non_search
+        elif operation == "CLICK":
+            g_low = (goal or "").lower()
+            if "free" in g_low or "available" in g_low:
+                free_c = {idx: a for idx, a in candidates.items() if "[occupied]" not in (a.get("label") or "").lower()}
+                if free_c:
+                    if "window" in g_low:
+                        win_c = {idx: a for idx, a in free_c.items() if any(w in a.get("label", "").upper() for w in ("A [", "D [", "WINDOW", "A ", "D "))}
+                        if win_c:
+                            free_c = win_c
+                    candidates = free_c
+                    targets[operation] = free_c
+            for color in ("red", "blue", "green", "yellow", "purple", "coral"):
+                if color in g_low:
+                    col_c = {idx: a for idx, a in candidates.items() if color in (a.get("label") or "").lower()}
+                    if col_c:
+                        candidates = col_c
+                        targets[operation] = col_c
+                        break
         questions[operation.lower() + "_target"] = {
             "type": "choice",
             "criteria": {
@@ -182,9 +220,20 @@ def systemone_request(state, goal, history):
     return body, operations, targets, controls
 
 
-def pick(answers, operations, targets, controls):
+def pick(answers, operations, targets, controls, history=(), goal=""):
     operation_answer = validate_choice(answers.get("operation", {}), operations)
     operation = operation_answer["choice"]
+
+    # Step 1 premature DONE suppression: if 0 actions executed and goal requires action, pick best available action
+    has_action_goal = any(w in (goal or "").lower() for w in ("click", "select", "press", "open", "type", "fill", "register", "download", "remove", "add", "pick"))
+    if operation == "DONE" and len(history) == 0 and has_action_goal:
+        action_ops = [op for op in operations if op not in {"DONE", "WAIT", "BLOCKED"}]
+        if action_ops:
+            op_probs = operation_answer.get("probabilities", {})
+            best_op = max(action_ops, key=lambda op: op_probs.get(op, 0.0))
+            if op_probs.get(best_op, 0.0) > 0.05:
+                operation = best_op
+
     target = None
     target_answer = None
     probabilities = {}
@@ -241,7 +290,7 @@ def choose(state, goal, history):
         entry = {"request": request, "answers": result["answers"], "model": result.get("model"), "gear": 1}
         teacher_log(entry, state, targets, screenshot, shot)
     return {
-        **pick(result["answers"], operations, targets, controls),
+        **pick(result["answers"], operations, targets, controls, history=history, goal=goal),
         "raw_answers": result["answers"],
         "model": result["model"],
         "usage": result.get("usage", {}),
@@ -265,6 +314,10 @@ class MissingValue(ValueError):
     def __init__(self, field):
         super().__init__(f"No value known for '{field}'; nothing typed.")
         self.field = field
+
+
+class UnrequestedSearchError(ValueError):
+    """An unrequested search/filter input field was skipped."""
 
 
 def field_context(goal, action, page, history, profile=None):
@@ -322,12 +375,16 @@ def field_text(context):
         output = json_content(result)
         value = output.get("text")
         if value is None or (isinstance(value, str) and not value.strip()):
+            if is_unrequested_search(context.get("field", {}), context.get("goal", "")):
+                raise UnrequestedSearchError("Skipping unrequested search bar; no search term requested.")
             raise MissingValue(context["field"]["label"])
         if isinstance(value, str) and value.lower().strip() in PLACEHOLDERS:
+            if is_unrequested_search(context.get("field", {}), context.get("goal", "")):
+                raise UnrequestedSearchError("Skipping unrequested search bar; placeholder found.")
             raise MissingValue(context["field"]["label"])
         if set(output) != {"text"} or not isinstance(value, str) or len(value) > 100000:
             raise ValueError()
-    except MissingValue:
+    except (MissingValue, UnrequestedSearchError):
         raise
     except (ValueError, KeyError, TypeError):
         raise ValueError("Text helper returned no valid field value; nothing typed.") from None
@@ -459,6 +516,27 @@ ELEMENT TABLE:
     }
 
 
+def extract_box_center(box, w=1200, h=800):
+    if isinstance(box, dict):
+        if "left" in box and "right" in box:
+            t, b = box.get("top", 0), box.get("bottom", 0)
+            l, r = box.get("left", 0), box.get("right", 0)
+            cx = (l + r) / 2 * w
+            cy = (t + b) / 2 * h
+        elif "x" in box and "width" in box:
+            cx = (box["x"] + box["width"] / 2) * w
+            cy = (box["y"] + box["height"] / 2) * h
+        else:
+            return w // 2, h // 2
+    elif isinstance(box, (list, tuple)) and len(box) == 4:
+        t, b, l, r = box
+        cx = (l + r) / 2 * w
+        cy = (t + b) / 2 * h
+    else:
+        return w // 2, h // 2
+    return min(max(int(round(cx)), 0), w - 1), min(max(int(round(cy)), 0), h - 1)
+
+
 def choose_vision_jev(page, goal, history, screenshot_b64, reason="low confidence", base=None):
     """Gear 2 on Jev 1.14 vision: Gear 1's questions plus CLICK_COORDS, an existence check, and a box.
     `base` overrides the TypeSafe URL (e.g. a local Laya server, which needs no key)."""
@@ -487,25 +565,28 @@ def choose_vision_jev(page, goal, history, screenshot_b64, reason="low confidenc
         request = {k: v for k, v in body.items() if k != "assets"}
         entry = {"request": request, "answers": answers, "model": result.get("model"), "gear": 2}
         teacher_log(entry, page, targets, screenshot_b64, screen.replace("-screen", ""))
-    decision = pick(answers, operations, targets, controls)
+    decision = pick(answers, operations, targets, controls, history=history, goal=goal)
     x = y = None
-    if decision["operation"] == "CLICK_COORDS":
-        # Assumed noul shape: {"choice": true|false} or {"value": ...}; anything not clearly yes counts as absent.
-        exists = answers.get("target_exists", {})
-        val = exists.get("choice", exists.get("value", exists.get("noul")))
-        if type(val) is bool:
-            is_present = val
-        elif isinstance(val, (int, float)):
-            is_present = val > 0.0
-        else:
-            is_present = str(val).lower() in {"true", "yes", "likely"}
-        if not is_present:
-            decision.update(choice="BLOCKED", operation="BLOCKED", probabilities={"BLOCKED": 1.0})
-        else:
-            box = answers["target_box"]["box"]
-            w, h = page.get("w", 1200), page.get("h", 800)
-            x = min(max(round((box["left"] + box["right"]) / 2 * w), 0), w - 1)
-            y = min(max(round((box["top"] + box["bottom"]) / 2 * h), 0), h - 1)
+
+    has_action_goal = any(w in (goal or "").lower() for w in ("click", "select", "press", "download", "open", "remove", "pick"))
+    click_targets = targets.get("CLICK", {})
+    # If text policy chose premature DONE or BLOCKED on step 1, but vision found a target box:
+    if "target_box" in answers and ((decision["operation"] in {"DONE", "BLOCKED"} and has_action_goal and len(history) == 0 and not click_targets) or decision["operation"] == "CLICK_COORDS"):
+        box = answers["target_box"].get("box", answers["target_box"])
+        w, h = page.get("w", 1200), page.get("h", 800)
+        bx, by = extract_box_center(box, w, h)
+        if bx is not None and by is not None:
+            # Check target exists if present
+            exists = answers.get("target_exists", {})
+            val = exists.get("choice", exists.get("value", exists.get("noul", True)))
+            is_present = val is True or (isinstance(val, (int, float)) and val > 0) or str(val).lower() in {"true", "yes", "likely"}
+            if is_present:
+                decision["operation"] = "CLICK_COORDS"
+                decision["choice"] = "CLICK_COORDS"
+                decision["probabilities"] = {"CLICK_COORDS": 1.0}
+                x, y = bx, by
+            else:
+                decision.update(choice="BLOCKED", operation="BLOCKED", probabilities={"BLOCKED": 1.0})
     return {
         **decision,
         "x": x,

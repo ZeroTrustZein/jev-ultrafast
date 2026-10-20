@@ -28,18 +28,63 @@ async function detach() {
   } catch (_) {}
 }
 
+let reconnectTimer = null;
+let reconnectDelay = 1000;
+let isReconnecting = false;
+
+function scheduleReconnect() {
+  if (isReconnecting || tabId === null) return;
+  isReconnecting = true;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(async () => {
+    isReconnecting = false;
+    try {
+      if (tabId !== null) {
+        await connect();
+        reconnectDelay = 1000;
+      }
+    } catch (_) {
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+      scheduleReconnect();
+    }
+  }, reconnectDelay);
+}
+
 function connect() {
   return new Promise((resolve, reject) => {
     if (socket && socket.readyState === WebSocket.OPEN) return resolve();
+    if (socket) {
+      try { socket.close(); } catch (_) {}
+      socket = null;
+    }
     socket = new WebSocket(RELAY);
-    socket.onopen = () => resolve();
-    socket.onerror = () => reject(new Error("Local agent relay not reachable on 127.0.0.1:8767"));
+    socket.onopen = () => {
+      reconnectDelay = 1000;
+      resolve();
+    };
+    socket.onerror = () => {
+      reject(new Error("Local agent relay not reachable on 127.0.0.1:8767"));
+    };
     socket.onclose = () => {
       socket = null;
-      detach();
+      if (tabId !== null) {
+        scheduleReconnect();
+      }
     };
     socket.onmessage = async (event) => {
-      const { id, method, params } = JSON.parse(event.data);
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (_) {
+        return;
+      }
+      if (msg.type === "ping") {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "pong" }));
+        }
+        return;
+      }
+      const { id, method, params } = msg;
       let reply;
       try {
         if (tabId === null) throw new Error("No tab attached");

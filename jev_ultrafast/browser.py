@@ -148,6 +148,12 @@ class Browser:
             ensure_daemon()
             self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
             self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
+            try:
+                self.call("Target.setAutoAttach", autoAttach=True, waitForDebuggerOnStart=False, flatten=True)
+                self.call("Page.enable")
+                self.call("DOM.enable")
+            except Exception:
+                pass
             self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
             # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
             self.call("Emulation.setFocusEmulationEnabled", enabled=True)
@@ -228,15 +234,16 @@ class Browser:
         raise StalePage("Page did not settle")
 
     def fresh(self, page, action=None):
-        if action is not None and action["kind"] in {"click", "select"}:
-            node = action["node"]
-            if type(node) is not int:
-                return False
-            current = self.evaluate(
-                "(() => { const c=window.__jevFast; "
-                f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
-            )
-            return current == [page["page_key"], page["guards"].get(str(node))]
+        if action is not None and action.get("kind") in {"click", "select", "coords"}:
+            node = action.get("node")
+            if node is not None and type(node) is int:
+                current = self.evaluate(
+                    "(() => { const c=window.__jevFast; "
+                    f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
+                )
+                return current == [page["page_key"], page["guards"].get(str(node))]
+            if action.get("kind") == "coords":
+                return True
         return self.evaluate(MARKER) == page["marker"]
 
     def act(self, action, page, text=None):
@@ -341,6 +348,8 @@ def browser_operation(request):
                 raise StalePage("Target changed or is covered. Observe again.")
             if kind != "select":
                 x, y = target["x"], target["y"]
+                call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+                time.sleep(0.08)
                 for event in ("mousePressed", "mouseReleased"):
                     call("Input.dispatchMouseEvent", type=event, x=x, y=y, button="left", clickCount=1)
                 if kind == "fill":
@@ -359,12 +368,68 @@ def browser_operation(request):
                         code="KeyA",
                         modifiers=4 if sys.platform == "darwin" else 2,
                     )
+                    call("Input.dispatchKeyEvent", type="rawKeyDown", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
+                    call("Input.dispatchKeyEvent", type="keyUp", key="Backspace", code="Backspace", windowsVirtualKeyCode=8)
                     call("Input.insertText", text=request["text"])
         return {"executed": action["id"]}
 
     info = evaluate(READ_STATE)
     if info is None:
         raise StalePage("Document is navigating")
+
+    # Multi-frame traversal: discover OOPIFs and embedded child frames (Azure blades, payment frames, OAuth)
+    if info.get("has_iframes"):
+        try:
+            ft = call("Page.getFrameTree")
+            child_frames = ft.get("frameTree", {}).get("childFrames", [])
+            if child_frames:
+                main_actions = list(info.get("actions", []))
+                base_node_offset = 10000
+                for c_idx, cf in enumerate(child_frames):
+                    f_info = cf.get("frame", {})
+                    fid = f_info.get("id")
+                    if not fid:
+                        continue
+                    try:
+                        owner = call("DOM.getFrameOwner", frameId=fid)
+                        bnid = owner.get("backendNodeId")
+                        if not bnid:
+                            continue
+                        box = call("DOM.getBoxModel", backendNodeId=bnid)
+                        content = box.get("model", {}).get("content", [])
+                        if len(content) < 2:
+                            continue
+                        frame_ox, frame_oy = content[0], content[1]
+
+                        # Create isolated execution context in child frame and execute READ_STATE
+                        world = call("Page.createIsolatedWorld", frameId=fid, worldName="jev_frame_eval")
+                        cid = world.get("executionContextId")
+                        if not cid:
+                            continue
+                        c_eval = call("Runtime.evaluate", expression=READ_STATE, contextId=cid, returnByValue=True)
+                        c_info = c_eval.get("result", {}).get("value")
+                        if not c_info or not c_info.get("actions"):
+                            continue
+
+                        # Translate child frame coordinates to global viewport pixels
+                        for act in c_info["actions"]:
+                            act_node = act.get("node")
+                            if isinstance(act_node, int):
+                                act["node"] = base_node_offset * (c_idx + 1) + act_node
+                            if "rect" in act and isinstance(act["rect"], dict):
+                                act["rect"]["x"] += frame_ox
+                                act["rect"]["y"] += frame_oy
+                            main_actions.append(act)
+
+                        # Append frame text content
+                        if c_info.get("text"):
+                            info["text"] = (info.get("text", "") + "\n\n" + c_info["text"])[:16000]
+                    except Exception:
+                        continue
+                info["actions"] = main_actions
+        except Exception:
+            pass
+
     if not request.get("upload"):
         # Without user files there is nothing to attach; never offer the operation.
         info["actions"] = [a for a in info["actions"] if a["kind"] != "upload"]

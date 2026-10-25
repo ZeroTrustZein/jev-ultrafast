@@ -10,10 +10,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-from browser_harness.admin import ensure_daemon
-from browser_harness.helpers import cdp
-
 # Atomically read visible content and controls, preserving actual DOM node identity.
+cdp = None
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text(encoding="utf-8")
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
@@ -134,6 +132,11 @@ class Browser:
                 self.call("Page.navigate", url=url)
                 time.sleep(0.3)  # let the old document unload before polling readyState
         else:
+            from browser_harness.admin import ensure_daemon
+            from browser_harness.helpers import cdp as bh_cdp
+
+            cdp = bh_cdp
+
             ensure_browser()
             ensure_daemon()
             self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]

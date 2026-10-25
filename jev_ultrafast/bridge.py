@@ -188,6 +188,7 @@ class AssistBridge:
             try:
                 # Pre-warm local server & relay concurrently while planner thinks
                 import re
+
                 from . import relay
                 from .planner import ensure_local_server
 

@@ -36,6 +36,20 @@
   const byId = (e,id) => (e.getRootNode().getElementById ? e.getRootNode() : e.ownerDocument).getElementById(id);
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+  // "datePickerMonthYearInput" -> "date picker month year input": ids are a last resort and read better split.
+  const humanize = s => s.replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').trim().toLowerCase();
+  // An unlabelled field usually sits next to its visible caption ("Select Date"). Take the closest short caption.
+  const nearbyLabel = e => {
+    if (!['INPUT','TEXTAREA','SELECT'].includes(e.tagName)) return '';
+    let node=e.parentElement;
+    for (let depth=0; node && depth<4; depth++, node=node.parentElement) {
+      // Stop once the container holds other fields too: its text would belong to them as well.
+      if ([...node.querySelectorAll('input,textarea,select')].some(f => f!==e && f.type!=='hidden')) return '';
+      const text=(node.innerText||'').trim().replace(/\s+/g,' ');
+      if (text) return text.length<=60 ? text : '';
+    }
+    return '';
+  };
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -55,7 +69,8 @@
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName==='TEXTAREA' ? (e.getAttribute('placeholder') || e.getAttribute('title') || e.id || e.name || 'Wikitext editor') : '') ||
-      childText || e.getAttribute('title') || e.getAttribute('placeholder') || fnHint || svgHint || (attrHint && !attrHint.startsWith('__') ? attrHint : '');
+      childText || e.getAttribute('title') || e.getAttribute('placeholder') || fnHint || svgHint || nearbyLabel(e) ||
+      (attrHint && !attrHint.startsWith('__') ? humanize(attrHint) : '');
     return baseName ? (baseName + statusSuffix).trim() : '';
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',

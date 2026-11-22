@@ -1229,3 +1229,23 @@ def test_session_ids_never_repeat():
 
     ids = {new_session_id() for _ in range(50)}
     assert len(ids) == 50
+
+
+def bounce_history(n):
+    hops = [("link", "https://demo.test/"), ("Forms", "https://demo.test/forms")]
+    return [{"action": hops[i % 2][0], "kind": "click", "page_changed": True, "url": hops[i % 2][1]} for i in range(n)]
+
+
+def test_ping_pong_targets_are_hidden(runner):
+    runner.state["history"] = bounce_history(6)
+    seen = runner.without_dead_ends({**page(), "actions": page()["actions"] + [
+        {"id": "e9", "kind": "click", "label": "Forms", "role": "link", "node": 30}]})
+    assert "Forms" in seen["dead_ends"]
+
+
+def test_ping_pong_stops_as_loop(runner):
+    runner.state["history"] = bounce_history(9)
+    runner.state["decision"] = click()
+    runner.state["browser"].observe.return_value = {**page(), "url": "https://demo.test/"}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["stop_reason"]["code"] == "loop" and "back and forth" in runner.state["stop_reason"]["message"]

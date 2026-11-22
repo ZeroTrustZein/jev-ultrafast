@@ -5,6 +5,7 @@ planner call, and starts a fresh attempt in the same tab with a sharper goal and
 """
 
 import json
+import time
 from urllib.parse import urlparse
 
 # Stops where another route may work. Refusals (a declined click), crashes and successes are never retried.
@@ -35,6 +36,7 @@ def plan_recovery(original_goal, agent, ask=None):
     content = json.dumps(
         {
             "original_goal": original_goal,
+            "today": time.strftime("%Y-%m-%d"),
             "stop": {"code": stop.get("code"), "message": stop.get("message")},
             "current_url": page.get("url"),
             "current_title": page.get("title"),

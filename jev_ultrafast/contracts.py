@@ -118,6 +118,9 @@ def missing_goal_values(goal, page) -> list:
     return missing
 
 
+_PROHIBITION = re.compile(r"^(read[- ]only|do not|don't|dont|never|no |not |avoid|without|must not|stop before)", re.I)
+
+
 def requirement_check(check) -> dict:
     """Normalise a verifier reply. With a per-requirement list, done needs every requirement met and quoted.
 
@@ -125,7 +128,12 @@ def requirement_check(check) -> dict:
     approving a page that only looks similar. The quotes become the evidence that evidence_holds checks.
     """
     check = dict(check or {}) if isinstance(check, dict) else {}
-    reqs = [r for r in check.get("requirements") or [] if isinstance(r, dict)]
+    # Prohibitions ("Read-only: do not log in") can never be quoted from a page, so they are not requirements here.
+    # A violated one shows up as a wrong page instead (a login form, a submitted order).
+    reqs = [
+        r for r in check.get("requirements") or []
+        if isinstance(r, dict) and not _PROHIBITION.match(str(r.get("need") or "").strip())
+    ]
     if reqs:
         unmet = [str(r.get("need") or "?") for r in reqs if not r.get("met") or not str(r.get("quote") or "").strip()]
         check["evidence"] = [str(r.get("quote")) for r in reqs if str(r.get("quote") or "").strip()]

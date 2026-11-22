@@ -175,7 +175,8 @@ Return JSON:
     the page's main subject, not just a link, recent-searches chip or sidebar entry),
   "requirements": [{"need": "each requirement of the goal: every item, value, direction and unit, and the kind of
     page asked for (search results vs AI answers/topic/keyword page)", "met": true/false,
-    "quote": "short exact quote from the page proving it, or empty"}],
+    "quote": "short exact quote from the page proving it, or empty"}] (only things that should be visible; never list
+    prohibitions such as "do not sign in" as requirements),
   "summary": "2-4 clean markdown bullet points of what was reached or found, what remains to be done, and immediate next action. Under 100 words. No fluff."
 }"""
 

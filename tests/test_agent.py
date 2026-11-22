@@ -1249,3 +1249,26 @@ def test_ping_pong_stops_as_loop(runner):
     runner.state["browser"].observe.return_value = {**page(), "url": "https://demo.test/"}
     runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
     assert runner.state["stop_reason"]["code"] == "loop" and "back and forth" in runner.state["stop_reason"]["message"]
+
+
+def test_prohibitions_are_not_requirements():
+    from jev_ultrafast.contracts import requirement_check
+
+    check = requirement_check({"done": True, "requirements": [
+        {"need": "Open the Ada Lovelace article", "met": True, "quote": "Ada Lovelace - Wikipedia"},
+        {"need": "Read-only: do not edit or log in", "met": False, "quote": ""},
+        {"need": "Do not sign in", "met": False, "quote": ""},
+    ]})
+    assert check["done"] is True and check["evidence"] == ["Ada Lovelace - Wikipedia"]
+
+
+def test_rate_limit_is_retried_then_succeeds(monkeypatch):
+    responses = [
+        Mock(status_code=429, is_error=True, headers={"retry-after": "0"}),
+        Mock(status_code=200, is_error=False, headers={}, json=Mock(return_value={"choices": [{"message": {}}]})),
+    ]
+    monkeypatch.setattr(model.CLIENT, "post", Mock(side_effect=responses))
+    sleeps = []
+    monkeypatch.setattr(model.time, "sleep", sleeps.append)
+    assert model.post_json("https://x.test", "k", {"messages": []})["choices"]
+    assert sleeps == [1.0]

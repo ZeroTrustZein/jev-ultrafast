@@ -48,7 +48,8 @@ VERIFY = """You check whether a browser agent finished its goal. Given the goal 
  "done": true/false, "missing": "what is still not satisfied, or empty"}.
 List EVERY requirement separately: each item, value, direction and unit (from AND to currencies, route start AND
 end, dates, counts) and the kind of page asked for (search results vs an AI-answers, topic, keyword or home page;
-an opened item vs a list). A value with the wrong unit, direction or page kind is not met.
+an opened item vs a list). A value with the wrong unit, direction or page kind is not met. Do not list prohibitions
+("do not sign in", "read-only") as requirements; only things that should be visible.
 Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
 an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
 the opened result) must be visible as the main subject of the page (its heading or main content), not only in a
@@ -131,6 +132,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
     if files:
         context_lines.append(f"Files the agent can attach to upload fields: {[Path(f).name for f in files]}")
     note = ("\n" + "\n".join(context_lines)) if context_lines else ""
+    # The planner once wrote 2024-01-15 for "2027-01-15"-style relative or partial dates; give it today's date.
+    note += f"\nToday's date: {time.strftime('%Y-%m-%d')}"
     plan = ask(PLAN, [{"type": "text", "text": request + note}, *documents(docs)])
     profile, goal = dict(plan.get("profile") or {}), plan["goal"]
     start_url = plan.get("url") or url or "https://html.duckduckgo.com/html/"

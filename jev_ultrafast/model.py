@@ -23,13 +23,19 @@ def post_json(url, key, body, headers=None):
     headers = {**auth_headers, **(headers or {})}
     for _ in range(5):
         res = None
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 response = CLIENT.post(url, json=current_body, headers=headers)
             except httpx.HTTPError:
                 raise RuntimeError("Model connection failed; no action executed.") from None
-            if response.status_code in {429, 529, 503} and attempt < 2:
-                time.sleep(0.5 * 2**attempt)
+            # Rate limits and gateway hiccups (429, 502) ended whole benchmark runs. Model calls mutate nothing, so
+            # waiting and asking again is safe; honour Retry-After, capped so a stuck provider still fails fast.
+            if response.status_code in {429, 502, 503, 504, 529} and attempt < 3:
+                try:
+                    wait = float(response.headers.get("retry-after") or 0)
+                except ValueError:
+                    wait = 0
+                time.sleep(min(max(wait, 1.0 * 2**attempt), 20))
                 continue
             if response.is_error:
                 raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")

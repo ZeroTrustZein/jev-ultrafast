@@ -1,0 +1,316 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "amazon-search",
+      "area": "shopping",
+      "start_url": "https://www.amazon.com",
+      "goal": "Search Amazon for 'usb-c cable'. Read-only: do not open a product page, add to cart, or sign in. Stop on the search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "/s?k="
+        ],
+        "url_any": [],
+        "text_any": [
+          "results",
+          "usb"
+        ]
+      }
+    },
+    {
+      "id": "ebay-search",
+      "area": "shopping",
+      "start_url": "https://www.ebay.com",
+      "goal": "Search eBay for 'vintage film camera'. Read-only: do not open a listing, bid, add to cart, or sign in. Stop on the search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [],
+        "url_any": [
+          "/sch/",
+          "_nkw="
+        ],
+        "text_any": [
+          "results",
+          "camera"
+        ]
+      }
+    },
+    {
+      "id": "gmaps-directions",
+      "area": "maps",
+      "start_url": "https://www.google.com/maps",
+      "goal": "Get walking directions in Google Maps from 'Eiffel Tower, Paris' to 'Louvre Museum, Paris'. Read-only: do not start navigation or share location. Stop on the directions panel showing both places.",
+      "max_steps": 12,
+      "success": {
+        "url_contains": [
+          "google.com/maps"
+        ],
+        "url_any": [
+          "/dir/"
+        ],
+        "text_any": [
+          "Louvre",
+          "Eiffel"
+        ]
+      }
+    },
+    {
+      "id": "booking-hotel-search",
+      "area": "travel",
+      "start_url": "https://www.booking.com",
+      "goal": "Search Booking.com for hotels in 'London' with check-in 2027-01-15, check-out 2027-01-17, 1 room, 2 adults. Use fake data only. Read-only: do not select a hotel, reserve, or sign in. Stop on the search results page.",
+      "max_steps": 18,
+      "success": {
+        "url_contains": [
+          "booking.com"
+        ],
+        "url_any": [
+          "searchresults"
+        ],
+        "text_any": [
+          "London",
+          "properties"
+        ]
+      }
+    },
+    {
+      "id": "google-flights-search",
+      "area": "travel",
+      "start_url": "https://www.google.com/travel/flights",
+      "goal": "Search Google Flights for a one-way flight from JFK (New York) to LHR (London Heathrow) departing 2027-01-15 for 1 adult. Read-only: do not select a flight, book, or sign in. Stop on the results list.",
+      "max_steps": 20,
+      "success": {
+        "url_contains": [
+          "google.com/travel/flights"
+        ],
+        "url_any": [
+          "tfs=",
+          "search"
+        ],
+        "text_any": [
+          "Heathrow",
+          "LHR"
+        ]
+      }
+    },
+    {
+      "id": "youtube-search-open",
+      "area": "video",
+      "start_url": "https://www.youtube.com",
+      "goal": "Search YouTube for 'python tutorial for beginners' and open the first video result. Read-only: do not like, comment, subscribe, or sign in. Stop on the video watch page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "/watch"
+        ],
+        "url_any": [],
+        "text_any": []
+      }
+    },
+    {
+      "id": "wikipedia-article",
+      "area": "reference",
+      "start_url": "https://en.wikipedia.org",
+      "goal": "Search English Wikipedia for 'Ada Lovelace' and open the article. Read-only: do not edit or log in. Stop on the Ada Lovelace article page.",
+      "max_steps": 8,
+      "success": {
+        "url_contains": [
+          "en.wikipedia.org/wiki/Ada_Lovelace"
+        ],
+        "url_any": [],
+        "text_any": [
+          "Ada Lovelace"
+        ]
+      }
+    },
+    {
+      "id": "bbc-news-search",
+      "area": "news",
+      "start_url": "https://www.bbc.com/news",
+      "goal": "Search BBC News for 'climate summit'. Read-only: do not sign in or enable notifications. Stop on the search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "search?q="
+        ],
+        "url_any": [],
+        "text_any": [
+          "climate",
+          "results"
+        ]
+      }
+    },
+    {
+      "id": "weather-london",
+      "area": "weather",
+      "start_url": "https://weather.com",
+      "goal": "Find the current weather forecast for 'London, England' on weather.com. Read-only: do not sign in or allow location access. Stop on the London forecast page.",
+      "max_steps": 12,
+      "success": {
+        "url_contains": [
+          "weather.com"
+        ],
+        "text_any": [
+          "London"
+        ]
+      }
+    },
+    {
+      "id": "allrecipes-search",
+      "area": "food",
+      "start_url": "https://www.allrecipes.com",
+      "goal": "Search Allrecipes for 'banana bread'. Read-only: do not sign in, rate, or save recipes. Stop on the search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "allrecipes.com"
+        ],
+        "url_any": [
+          "/search"
+        ],
+        "text_any": [
+          "banana bread"
+        ]
+      }
+    },
+    {
+      "id": "github-repo-search",
+      "area": "code",
+      "start_url": "https://github.com",
+      "goal": "Search GitHub for 'playwright'. Read-only: do not sign in, star, fork, or watch anything. Stop on the GitHub search results page with the repositories tab.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "github.com/search"
+        ],
+        "url_any": [],
+        "text_any": [
+          "repositories",
+          "playwright"
+        ]
+      }
+    },
+    {
+      "id": "reddit-search",
+      "area": "social",
+      "start_url": "https://www.reddit.com",
+      "goal": "Search Reddit for 'best mechanical keyboard'. Read-only: do not sign in, vote, or post. Stop on the Reddit search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "reddit.com/search"
+        ],
+        "url_any": [],
+        "text_any": [
+          "mechanical keyboard"
+        ]
+      }
+    },
+    {
+      "id": "practice-form-fill",
+      "area": "forms",
+      "start_url": "https://demoqa.com/automation-practice-form",
+      "goal": "On the Student Registration Form, fill in First Name 'Test', Last Name 'User', Email 'test@example.com', choose gender 'Other', Mobile '5555555555', pick any hobby checkbox, and type the subject 'Maths' in the subjects box. Use only fake data. Do NOT click Submit. Stop with the filled form still visible.",
+      "max_steps": 25,
+      "success": {
+        "url_contains": [
+          "automation-practice-form"
+        ],
+        "text_any": [
+          "test@example.com"
+        ],
+        "text_all": [
+          "test@example.com",
+          "Test",
+          "User"
+        ]
+      }
+    },
+    {
+      "id": "datepicker-set-date",
+      "area": "forms",
+      "start_url": "https://demoqa.com/date-picker",
+      "goal": "Open the 'Select Date' date picker and choose 15 March 2027. Do not change any other field and do not submit anything. Stop with the date picker closed and the date chosen.",
+      "max_steps": 15,
+      "success": {
+        "url_contains": [
+          "date-picker"
+        ],
+        "text_any": [
+          "03/15/2027"
+        ]
+      }
+    },
+    {
+      "id": "stackoverflow-search",
+      "area": "code",
+      "start_url": "https://stackoverflow.com",
+      "goal": "Search Stack Overflow for 'python list comprehension'. Read-only: do not sign in, vote, or ask a question. Stop on the search results page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "stackoverflow.com"
+        ],
+        "url_any": [
+          "/search"
+        ],
+        "text_any": [
+          "list comprehension"
+        ]
+      }
+    },
+    {
+      "id": "imdb-title-lookup",
+      "area": "entertainment",
+      "start_url": "https://www.imdb.com",
+      "goal": "Search IMDb for 'The Matrix' and open the title page for the 1999 film. Read-only: do not sign in, rate, or add to watchlist. Stop on the title page.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "imdb.com/title/"
+        ],
+        "url_any": [],
+        "text_any": [
+          "The Matrix"
+        ]
+      }
+    },
+    {
+      "id": "currency-convert-usd-eur",
+      "area": "finance",
+      "start_url": "https://www.xe.com",
+      "goal": "On xe.com, convert 100 US Dollars to Euros using the currency converter. Read-only: do not sign in or set alerts. Stop on the converter result page showing EUR.",
+      "max_steps": 10,
+      "success": {
+        "url_contains": [
+          "xe.com"
+        ],
+        "url_any": [
+          "To=EUR",
+          "to=EUR"
+        ],
+        "text_any": [
+          "Euro",
+          "EUR"
+        ]
+      }
+    },
+    {
+      "id": "dictionary-definition",
+      "area": "reference",
+      "start_url": "https://www.merriam-webster.com",
+      "goal": "Look up the definition of the word 'serendipity' on Merriam-Webster. Read-only: do not sign in or save words. Stop on the 'serendipity' dictionary entry page.",
+      "max_steps": 8,
+      "success": {
+        "url_contains": [
+          "merriam-webster.com/dictionary/serendipity"
+        ],
+        "url_any": [],
+        "text_any": [
+          "serendipity"
+        ]
+      }
+    }
+  ]
+}

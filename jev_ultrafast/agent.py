@@ -7,7 +7,7 @@ import re
 import time
 from pathlib import Path
 
-from .browser import Browser, StalePage
+from .browser import Browser, StalePage, is_empty
 from .model import MissingValue, action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
@@ -138,8 +138,25 @@ class Agent:
                     state["page"]["screenshot"] = shot.get("data")
                 except Exception:
                     pass
+            if is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
+                # Nothing rendered yet. Asking the models here only produced BLOCKED; wait instead.
+                state["decision"] = {
+                    "choice": "wait",
+                    "operation": "WAIT",
+                    "target": None,
+                    "confidence": 1.0,
+                    "probabilities": {"wait": 1.0},
+                    "latency_ms": 0,
+                    "usage": {},
+                    "gear": 0,
+                    "reason": "page has not rendered yet",
+                }
+                gear2_on = False
+            else:
+                state["decision"] = None
             try:
-                state["decision"] = choose(state["page"], state["goal"], state["history"])
+                if state["decision"] is None:
+                    state["decision"] = choose(state["page"], state["goal"], state["history"])
             except Exception as exc:
                 if gear2_on:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
@@ -320,6 +337,9 @@ class Agent:
                     f"Repeated: {', '.join(dict.fromkeys(h['action'] for h in repeated))}.",
                 )
             if idle:
+                if is_empty(state["page"]):
+                    message = "The page never rendered any content, even after waiting. It may be blocked or broken."
+                    return self.stop("blocked", "empty_page", message)
                 return self.stop(
                     "blocked", "idle", "Waited 8 times in a row and the page never changed, so there was no next step."
                 )

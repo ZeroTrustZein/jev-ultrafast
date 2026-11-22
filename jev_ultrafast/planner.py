@@ -12,6 +12,7 @@ import mimetypes
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -144,15 +145,27 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
         return {**check, **agent.snapshot()}
 
 
-def ensure_local_server(port=8791):
-    """Ensure the local distilled Laya server is serving if running in local mode."""
+def local_laya_port(default=8791):
+    """The port of a local Laya server: from TYPESAFE_BASE_URL when it points at this machine, else LAYA_PORT."""
+    parsed = urllib.parse.urlparse(os.environ.get("TYPESAFE_BASE_URL", ""))
+    if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port:
+        return parsed.port
+    return int(os.environ.get("LAYA_PORT") or default)
+
+
+def ensure_local_server(port=None):
+    """Ensure the local distilled Laya server is serving if running in local mode.
+
+    start.bat and .env may run Laya on another port (e.g. 8793). A local TYPESAFE_BASE_URL now counts as local
+    whatever its port, so the server is still checked and auto-started instead of being treated as remote.
+    """
     base = os.environ.get("TYPESAFE_BASE_URL", "").rstrip("/")
-    # Default to local 75ms distilled server unless user explicitly specified a remote URL
-    if not base or f":{port}" in base:
+    port = port or local_laya_port()
+    local = not base or urllib.parse.urlparse(base).hostname in {"127.0.0.1", "localhost"}
+    if local:
         base = f"http://127.0.0.1:{port}"
         os.environ["TYPESAFE_BASE_URL"] = base
         os.environ.setdefault("TYPESAFE_API_KEY", "local")
-    if f":{port}" in base:
         try:
             urllib.request.urlopen(f"{base}/v1/systemone", timeout=1)
             return
@@ -234,12 +247,14 @@ def main():
     parser.add_argument("--file", action="append", default=[], help="File the agent can upload to forms.")
     parser.add_argument("--url", help="Target URL (defaults to URL derived by planner).")
     parser.add_argument("--browser", choices=["chrome", "brave"], help="Browser to drive (default: auto).")
-    parser.add_argument("--local", action="store_true", help="Force local distilled Laya engine on port 8791.")
+    parser.add_argument(
+        "--local", action="store_true", help="Force the local distilled Laya engine (LAYA_PORT, default 8791)."
+    )
     args = parser.parse_args()
     if args.browser:
         os.environ["BROWSER"] = args.browser
     if args.local:
-        os.environ["TYPESAFE_BASE_URL"] = "http://127.0.0.1:8791"
+        os.environ["TYPESAFE_BASE_URL"] = f"http://127.0.0.1:{local_laya_port()}"
         os.environ["TYPESAFE_API_KEY"] = "local"
     ensure_local_server()
     if not args.request:

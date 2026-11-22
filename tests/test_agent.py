@@ -933,3 +933,63 @@ def test_missing_value_still_reaches_the_caller(runner, monkeypatch):
     monkeypatch.setattr(loop, "field_text", Mock(side_effect=model.MissingValue("Email")))
     with pytest.raises(model.MissingValue):
         list(runner.run())
+
+
+def empty_page():
+    state = {"url": "https://shop.test/", "title": "", "text": "", "scroll": {"y": 0},
+             "actions": [{"id": "wait", "kind": "wait", "label": "Wait"}]}
+    state["fingerprint"] = fingerprint(state)
+    return state
+
+
+def test_empty_page_waits_instead_of_asking_models(runner, monkeypatch):
+    runner.state.update(status="ready", page=empty_page())
+    runner.state["browser"].observe.return_value = empty_page()
+    chooser = Mock()
+    monkeypatch.setattr(loop, "choose", chooser)
+    runner.command("predict")
+    chooser.assert_not_called()
+    assert runner.state["decision"]["choice"] == "wait"
+
+
+def test_page_that_never_renders_stops_as_empty_page(runner, monkeypatch):
+    monkeypatch.setattr(loop, "choose", Mock())
+    runner.state.update(status="ready", page=empty_page())
+    runner.state["browser"].observe.return_value = empty_page()
+    for _ in range(8):
+        runner.command("tick")
+    assert runner.state["stop_reason"]["code"] == "empty_page"
+
+
+def test_observe_retries_while_page_is_blank(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.session, b.allow_upload = "s", False
+    b.evaluate = Mock(return_value=False)
+    b.settle = Mock()
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[empty_page(), empty_page(), page()]))
+    assert b.observe(screenshot=False)["text"] == "Search"
+    assert b.settle.call_count == 2
+
+
+def test_wait_is_always_fresh_and_fill_checks_only_its_node():
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    p = {**page(), "page_key": "k", "guards": {"10": "g"}, "marker": "old"}
+    b.evaluate = Mock(return_value=["k", "g"])
+    assert b.fresh(p, {"kind": "wait"}) is True
+    assert b.fresh(p, {"kind": "fill", "node": 10}) is True  # marker changed elsewhere; node is unchanged
+    b.evaluate.return_value = ["k", "changed"]
+    assert b.fresh(p, {"kind": "fill", "node": 10}) is False
+
+
+def test_local_laya_port_follows_env(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "http://127.0.0.1:8793")
+    assert planner.local_laya_port() == 8793
+    monkeypatch.delenv("TYPESAFE_BASE_URL")
+    monkeypatch.setenv("LAYA_PORT", "8800")
+    assert planner.local_laya_port() == 8800

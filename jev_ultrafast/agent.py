@@ -7,12 +7,23 @@ import re
 import time
 from pathlib import Path
 
-from .browser import Browser, StalePage
+from .browser import Browser, StalePage, is_empty
 from .model import MissingValue, action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
 # Irreversible or outward-facing clicks. Code-owned, so a model cannot talk its way past the gate.
 SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign|apply|delete|checkout)\b", re.I)
+# Always gated, whatever else the label says ("Cancel order" still cancels an order).
+IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|checkout)\b", re.I)
+# Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
+HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
+
+
+def sensitive(label):
+    label = label or ""
+    if IRREVERSIBLE.search(label):
+        return True
+    return bool(SENSITIVE.search(label)) and not HARMLESS.search(label)
 
 
 def gear2(page, goal, history, screenshot, reason):
@@ -71,6 +82,24 @@ class Agent:
             **{k: v for k, v in self.state.items() if k != "browser"},
             "elements": action_space(self.state["page"]["actions"])[0],
         }
+
+    def without_dead_ends(self, page):
+        """The page as the models see it, minus targets that already did nothing twice on this URL.
+
+        Benchmarks showed loops on widgets (date pickers, nav chips, autocompletes): the same click, no page change,
+        again and again. Hiding a proven no-op forces a different route, such as typing into the field instead.
+        """
+        counts = {}
+        for h in self.state["history"]:
+            if h.get("page_changed") is False and h.get("kind") not in {"wait", "fill"} and h.get("url") == page["url"]:
+                counts[h["action"]] = counts.get(h["action"], 0) + 1
+        dead = {label for label, n in counts.items() if n >= 2}
+        if not dead:
+            return page
+        kept = [a for a in page["actions"] if a.get("kind") == "wait" or a.get("label") not in dead]
+        if not any(a.get("kind") != "wait" for a in kept):
+            return page  # Never hide everything; let the stop rules decide instead.
+        return {**page, "actions": kept, "dead_ends": sorted(dead)}
 
     def stop(self, status, code, message, **details):
         """End the run with a reason a person can read. Every stop goes through here, so none is silent."""
@@ -138,13 +167,34 @@ class Agent:
                     state["page"]["screenshot"] = shot.get("data")
                 except Exception:
                     pass
+            if is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
+                # Nothing rendered yet. Asking the models here only produced BLOCKED; wait instead.
+                state["decision"] = {
+                    "choice": "wait",
+                    "operation": "WAIT",
+                    "target": None,
+                    "confidence": 1.0,
+                    "probabilities": {"wait": 1.0},
+                    "latency_ms": 0,
+                    "usage": {},
+                    "gear": 0,
+                    "reason": "page has not rendered yet",
+                }
+                gear2_on = False
+            else:
+                state["decision"] = None
             try:
-                state["decision"] = choose(state["page"], state["goal"], state["history"])
+                if state["decision"] is None:
+                    state["decision"] = choose(self.without_dead_ends(state["page"]), state["goal"], state["history"])
             except Exception as exc:
                 if gear2_on:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
                     state["decision"] = gear2(
-                        state["page"], state["goal"], state["history"], screenshot, reason=f"gear 1 error: {exc}"
+                        self.without_dead_ends(state["page"]),
+                        state["goal"],
+                        state["history"],
+                        screenshot,
+                        reason=f"gear 1 error: {exc}",
                     )
                 else:
                     raise
@@ -168,7 +218,11 @@ class Agent:
                 try:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
                     state["decision"] = gear2(
-                        state["page"], state["goal"], state["history"], screenshot, reason=trigger_reason
+                        self.without_dead_ends(state["page"]),
+                        state["goal"],
+                        state["history"],
+                        screenshot,
+                        reason=trigger_reason,
                     )
                 except Exception as exc:
                     state["decision"]["gear"] = 1
@@ -255,7 +309,7 @@ class Agent:
                 self.approve
                 and gated
                 and action["kind"] in {"click", "select", "coords"}
-                and SENSITIVE.search(action["label"])
+                and sensitive(action["label"])
             ):
                 if not self.approve(action):
                     state["denied"] = action["label"]
@@ -320,6 +374,9 @@ class Agent:
                     f"Repeated: {', '.join(dict.fromkeys(h['action'] for h in repeated))}.",
                 )
             if idle:
+                if is_empty(state["page"]):
+                    message = "The page never rendered any content, even after waiting. It may be blocked or broken."
+                    return self.stop("blocked", "empty_page", message)
                 return self.stop(
                     "blocked", "idle", "Waited 8 times in a row and the page never changed, so there was no next step."
                 )

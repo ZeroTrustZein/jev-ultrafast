@@ -8,8 +8,9 @@ from pathlib import Path
 
 from .agent import Agent
 from .chat_agent import chat_turn
+from .contracts import GAVE_UP, page_key
 from .model import MissingValue
-from .questions import MAX_STEPS
+from .questions import MAX_EARLY_CHECKS, MAX_STEPS
 
 # Side-panel attachments land here (artifacts/ is git-ignored), so the agent can read and upload them.
 UPLOADS = Path.cwd() / "artifacts" / "uploads"
@@ -313,6 +314,7 @@ class AssistBridge:
                     ) as agent:
                         self.active_agent = agent
                         done_verifications = 0
+                        checked_urls = set()
                         while True:
                             while agent.state["status"] not in {"done", "blocked"}:
                                 with self.lock:
@@ -339,6 +341,27 @@ class AssistBridge:
                                                 "time": time.strftime("%H:%M:%S"),
                                             }
                                             step_callback(step_info)
+                                            # Reached the goal mid-run? Check each new URL instead of running on.
+                                            page_now = agent.state["page"]
+                                            if (
+                                                agent.state["status"] == "ready"
+                                                and last_h.get("page_changed")
+                                                and page_key(page_now) not in checked_urls
+                                                and len(checked_urls) < MAX_EARLY_CHECKS
+                                            ):
+                                                from .chat_agent import synthesize_outcome
+
+                                                checked_urls.add(page_key(page_now))
+                                                early = synthesize_outcome(agent.state["goal"], page_now)
+                                                if early.get("completed"):
+                                                    agent.stop(
+                                                        "done",
+                                                        "verified_done",
+                                                        "The goal is visibly complete on this page.",
+                                                        evidence=early.get("evidence"),
+                                                        summary=early.get("summary"),
+                                                    )
+                                                    break
                                 except MissingValue as missing:
                                     # Form needs user information
                                     prompt_text = f"The form needs your **{missing.field}**. What should I enter?"
@@ -383,7 +406,11 @@ class AssistBridge:
                                 if agent.state["status"] == "done":
                                     from .chat_agent import synthesize_outcome
 
-                                    outcome = synthesize_outcome(agent.state["goal"], final_page)
+                                    stop = agent.state.get("stop_reason") or {}
+                                    if stop.get("code") == "verified_done":
+                                        outcome = {"completed": True, "summary": stop.get("summary") or ""}
+                                    else:
+                                        outcome = synthesize_outcome(agent.state["goal"], final_page)
                                     is_done = outcome.get("completed", True) if isinstance(outcome, dict) else True
                                     summary = outcome.get("summary", outcome) if isinstance(outcome, dict) else str(outcome)
 
@@ -406,6 +433,17 @@ class AssistBridge:
                                     break
                                 elif agent.state["status"] == "blocked":
                                     stop = agent.state.get("stop_reason") or {}
+                                    if stop.get("code") in GAVE_UP:
+                                        # Ran out of road, not refused: the goal may already be on screen.
+                                        from .chat_agent import synthesize_outcome
+
+                                        final = synthesize_outcome(agent.state["goal"], final_page)
+                                        if final.get("completed"):
+                                            asst_msg["content"] += (
+                                                f"\n\n✅ **Completed!** Finished on page: [{final_page.get('title')}]"
+                                                f"({final_page.get('url')})\n\n{final.get('summary', '')}"
+                                            )
+                                            break
                                     where = f"[{final_page.get('title')}]({final_page.get('url')})"
                                     msg = (
                                         f"\n\n⛔ **Stopped after {stop.get('steps', 0)} steps on {where}:** "

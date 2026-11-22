@@ -158,14 +158,39 @@ class Browser:
             # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
             self.call("Emulation.setFocusEmulationEnabled", enabled=True)
             self.call("Page.navigate", url=url)
-        deadline = time.monotonic() + 15
+        self.wait_ready(navigated=bool(url) and url != "about:blank")
+
+    def wait_ready(self, navigated=True, timeout=15):
+        """Wait until the new document has rendered something, then until the DOM stops churning.
+
+        A fresh tab starts on about:blank, whose readyState is already "complete". Polling readyState alone let
+        heavy sites (Amazon, YouTube, Booking...) be observed as an empty page, and both gears then chose BLOCKED.
+        """
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                if self.evaluate("document.readyState") == "complete":
-                    break
+                state = self.evaluate(READY_STATE) or {}
             except StalePage:
-                pass  # mid-navigation: the old document is gone, the new one is not ready yet
-            time.sleep(0.02)
+                state = {}  # mid-navigation: the old document is gone, the new one is not ready yet
+            left_blank = not navigated or state.get("href") not in {None, "about:blank"}
+            if left_blank and state.get("ready") in {"interactive", "complete"} and state.get("content"):
+                break
+            time.sleep(0.05)
+        self.settle(min(2.5, max(0.0, deadline - time.monotonic())))
+
+    def settle(self, limit=2.5, quiet_ms=300):
+        """Resolve once the DOM has had no mutations for quiet_ms, or after limit seconds. Read-only."""
+        if limit <= 0:
+            return
+        try:
+            self.call(
+                "Runtime.evaluate",
+                expression=SETTLE_JS % {"quiet": quiet_ms, "limit": round(limit * 1000)},
+                awaitPromise=True,
+                returnByValue=True,
+            )
+        except Exception:
+            pass
 
     def call(self, method, **params):
         return cdp(method, session_id=self.session, **params)
@@ -217,9 +242,11 @@ class Browser:
                 time.sleep(0.15)
         except Exception:
             pass
+        page = None
+        empty_deadline = time.monotonic() + EMPTY_PAGE_WAIT
         for attempt in range(25):
             try:
-                return browser_operation(
+                page = browser_operation(
                     {
                         "operation": "observe",
                         "session": self.session,
@@ -231,10 +258,22 @@ class Browser:
                 if attempt == 24:
                     raise
                 time.sleep(0.1)
+                continue
+            # An empty observation is a page still rendering, not a page with no way forward.
+            if is_empty(page) and time.monotonic() < empty_deadline:
+                self.settle(0.5)
+                continue
+            return page
+        if page is not None:
+            return page
         raise StalePage("Page did not settle")
 
     def fresh(self, page, action=None):
-        if action is not None and action.get("kind") in {"click", "select", "coords"}:
+        if action is not None and action.get("kind") == "wait":
+            return True  # Waiting mutates nothing, so a changed page cannot make it unsafe.
+        # Check only the target node and form state, not the whole page: ads and carousels that keep changing
+        # elsewhere used to make every decision stale, and the agent re-predicted until its call budget ran out.
+        if action is not None and action.get("kind") in {"click", "select", "coords", "fill", "upload"}:
             node = action.get("node")
             if node is not None and type(node) is int:
                 current = self.evaluate(
@@ -265,6 +304,31 @@ class Browser:
 
     def __exit__(self, *_args):
         self.close()
+
+
+EMPTY_PAGE_WAIT = 6.0
+
+READY_STATE = """(() => ({
+  href: location.href,
+  ready: document.readyState,
+  content: !!document.body && ((document.body.innerText || '').trim().length > 0 ||
+    !!document.querySelector('a[href],button,input,select,textarea,[role="button"],[role="link"]'))
+}))()"""
+
+SETTLE_JS = """new Promise(resolve => {
+  let timer;
+  const done = () => { observer.disconnect(); clearTimeout(cap); resolve(true); };
+  const observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(done, %(quiet)d); });
+  observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+  timer = setTimeout(done, %(quiet)d);
+  const cap = setTimeout(done, %(limit)d);
+})"""
+
+
+def is_empty(page):
+    """No text and nothing to act on besides WAIT: the document has not rendered yet."""
+    actionable = [a for a in page.get("actions", []) if a.get("kind") != "wait"]
+    return not (page.get("text") or "").strip() and not actionable
 
 
 def fingerprint(state):

@@ -933,3 +933,215 @@ def test_missing_value_still_reaches_the_caller(runner, monkeypatch):
     monkeypatch.setattr(loop, "field_text", Mock(side_effect=model.MissingValue("Email")))
     with pytest.raises(model.MissingValue):
         list(runner.run())
+
+
+def empty_page():
+    state = {"url": "https://shop.test/", "title": "", "text": "", "scroll": {"y": 0},
+             "actions": [{"id": "wait", "kind": "wait", "label": "Wait"}]}
+    state["fingerprint"] = fingerprint(state)
+    return state
+
+
+def test_empty_page_waits_instead_of_asking_models(runner, monkeypatch):
+    runner.state.update(status="ready", page=empty_page())
+    runner.state["browser"].observe.return_value = empty_page()
+    chooser = Mock()
+    monkeypatch.setattr(loop, "choose", chooser)
+    runner.command("predict")
+    chooser.assert_not_called()
+    assert runner.state["decision"]["choice"] == "wait"
+
+
+def test_page_that_never_renders_stops_as_empty_page(runner, monkeypatch):
+    monkeypatch.setattr(loop, "choose", Mock())
+    runner.state.update(status="ready", page=empty_page())
+    runner.state["browser"].observe.return_value = empty_page()
+    for _ in range(8):
+        runner.command("tick")
+    assert runner.state["stop_reason"]["code"] == "empty_page"
+
+
+def test_observe_retries_while_page_is_blank(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.session, b.allow_upload = "s", False
+    b.evaluate = Mock(return_value=False)
+    b.settle = Mock()
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[empty_page(), empty_page(), page()]))
+    assert b.observe(screenshot=False)["text"] == "Search"
+    assert b.settle.call_count == 2
+
+
+def test_wait_is_always_fresh_and_fill_checks_only_its_node():
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    p = {**page(), "page_key": "k", "guards": {"10": "g"}, "marker": "old"}
+    b.evaluate = Mock(return_value=["k", "g"])
+    assert b.fresh(p, {"kind": "wait"}) is True
+    assert b.fresh(p, {"kind": "fill", "node": 10}) is True  # marker changed elsewhere; node is unchanged
+    b.evaluate.return_value = ["k", "changed"]
+    assert b.fresh(p, {"kind": "fill", "node": 10}) is False
+
+
+def test_local_laya_port_follows_env(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "http://127.0.0.1:8793")
+    assert planner.local_laya_port() == 8793
+    monkeypatch.delenv("TYPESAFE_BASE_URL")
+    monkeypatch.setenv("LAYA_PORT", "8800")
+    assert planner.local_laya_port() == 8800
+
+
+@pytest.mark.parametrize(
+    "label, gated",
+    [
+        ("Submit search", False),
+        ("Dismiss sign-in info.", False),
+        ("Sign in", True),
+        ("Submit application", True),
+        ("Cancel order", True),
+        ("Place order", True),
+        ("Search", False),
+    ],
+)
+def test_safety_gate_skips_harmless_clicks_only(label, gated):
+    assert loop.sensitive(label) is gated
+
+
+def test_evidence_must_be_on_the_page():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "100 EUR =\n 108.43  USD   Mid-market rate"
+    assert evidence_holds(["100 EUR = 108.43 USD"], text)
+    assert not evidence_holds(["100 EUR = 109.00 USD"], text)
+    assert not evidence_holds([], text) and not evidence_holds(None, text)
+
+
+def test_planner_rejects_done_without_visible_evidence(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setattr(planner, "ask", Mock(return_value={"done": True, "evidence": ["Banana bread recipe"]}))
+    bread = {**page(), "text": "Bread category"}
+    assert planner.verify("Open a banana bread recipe", bread)["done"] is False
+    planner.ask.return_value = {"done": True, "evidence": ["Bread category"]}
+    assert planner.verify("Open the bread category", bread)["done"] is True
+
+
+def test_planner_stops_early_once_goal_is_visible(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = loop.Agent.__new__(loop.Agent)
+    target = {**page(), "url": "https://example.test/book", "text": "The Book page"}
+    agent.state = {"status": "ready", "page": page(), "history": [], "goal": "Open the book"}
+    agent.state.update(started_at=None, elapsed_ms=0)
+
+    def run():
+        agent.state["history"].append({"action": "Go", "page_changed": True})
+        agent.state["page"] = target
+        yield agent.snapshot()
+        raise AssertionError("kept running after the goal was verified")
+
+    agent.run = run
+    agent.snapshot = lambda: dict(agent.state)
+    agent.__enter__ = lambda *_: agent
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [{"url": "https://example.test/", "goal": "Open the book", "profile": {}},
+               {"done": True, "evidence": ["The Book page"], "missing": ""}]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Open the book", report=lambda _: None)
+    assert result["done"] is True and agent.state["stop_reason"]["code"] == "verified_done"
+    assert planner.ask.call_count == 2  # no second verification after the early one
+
+
+def test_outcome_check_needs_quoted_proof(monkeypatch):
+    from jev_ultrafast import chat_agent
+
+    reply = '{"completed": true, "summary": "Converted", "evidence": ["108.43 USD"]}'
+    monkeypatch.setattr(chat_agent, "post_json", lambda *_: {"choices": [{"message": {"content": reply}}]})
+    unconverted = {**page(), "text": "Currency converter"}
+    assert chat_agent.synthesize_outcome("Convert 100 EUR", unconverted)["completed"] is False
+    assert chat_agent.synthesize_outcome("Convert 100 EUR", {**page(), "text": "= 108.43 USD"})["completed"] is True
+
+
+def test_evidence_matches_title_and_ignores_punctuation():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "Filter by\nRepositories 1.2k\nmicrosoft/playwright"
+    title = "Repositories search results - playwright"
+    assert evidence_holds(["repositories Search Results · playwright"], text, title)
+    assert evidence_holds(["microsoft/playwright ... Repositories"], text)
+    assert not evidence_holds(["London, England"], text, "Berlin-Mitte Weather")
+
+
+def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = loop.Agent.__new__(loop.Agent)
+    done_page = {**page(), "url": "https://maps.test/dir", "text": "Route: 12 min via A1"}
+    agent.state = {"status": "blocked", "page": done_page, "history": [], "goal": "Get directions"}
+    agent.state.update(started_at=None, elapsed_ms=0, stop_reason={"code": "call_budget", "message": "budget"})
+    agent.run = lambda: iter(())
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [{"url": "https://maps.test/", "goal": "Get directions", "profile": {}},
+               {"done": True, "evidence": ["Route: 12 min"], "missing": ""}]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Get directions", report=lambda _: None)
+    assert result["done"] is True and agent.state["stop_reason"]["after"] == "call_budget"
+
+
+def test_planner_never_overrules_a_refusal(monkeypatch):
+    from jev_ultrafast import planner
+
+    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "model_blocked", "message": "no"}})
+    fake.snapshot = Mock(return_value={"page": page()})
+    fake.__enter__ = Mock(return_value=fake)
+    fake.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(planner, "Agent", Mock(return_value=fake))
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    ask = Mock(return_value={"url": "https://example.test/", "goal": "Find a book", "profile": {}})
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 1
+
+
+def test_target_that_did_nothing_twice_is_hidden(runner):
+    for _ in range(2):
+        runner.state["history"].append(
+            {"action": "Go", "kind": "click", "page_changed": False, "url": runner.state["page"]["url"]}
+        )
+    seen = runner.without_dead_ends(runner.state["page"])
+    assert "Go" not in {a["label"] for a in seen["actions"]} and seen["dead_ends"] == ["Go"]
+    assert any(a["label"] == "Go" for a in runner.state["page"]["actions"])  # the real page is untouched
+
+
+def test_goal_values_ignore_apostrophes_and_dates():
+    from jev_ultrafast.contracts import goal_values
+
+    goal = "Find the user's flight from 'Berlin' on '2027-01-15', don't book. Check 'Paris'"
+    assert goal_values(goal) == ["Berlin", "Paris"]
+
+
+def test_route_without_the_destination_is_not_done(monkeypatch):
+    from jev_ultrafast import planner
+
+    goal = "Get directions from 'Eiffel Tower, Paris' to 'Louvre Museum, Paris'"
+    route = {**page(), "url": "https://maps.test/dir/Eiffelturm/48.85,2.29/", "text": "Eiffelturm 6 min 400 m Paris"}
+    monkeypatch.setattr(planner, "ask", Mock(return_value={"done": True, "evidence": ["Eiffelturm", "6 min 400 m"]}))
+    check = planner.verify(goal, route)
+    assert check["done"] is False and "Louvre" in check["missing"]
+    route["text"] += " Louvre Museum 25 min"
+    assert planner.verify(goal, route)["done"] is True
+
+
+def test_typed_field_values_count_as_on_the_page():
+    from jev_ultrafast.contracts import missing_goal_values
+
+    form = {**page(), "text": "Student Registration Form First Name"}
+    form["actions"] = [{**page()["actions"][0], "value": "Test"}]
+    assert missing_goal_values("Fill First Name 'Test'", form) == []

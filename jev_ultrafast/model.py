@@ -412,7 +412,10 @@ RULES:
   choose CLICK_COORDS with the exact (x, y) coordinates of the seat/control in CSS pixels. Select central seats.
 - Never choose WAIT on an idle page. Recent WAIT actions are not loading. Prefer a useful visible control over WAIT.
 - Submit populated search fields: if a search box has a value and Search/Submit is visible, CLICK it.
-- Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE."""
+- Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE.
+- Date pickers: if the date input accepts text, TYPE_TEXT the full date instead of clicking month arrows.
+- DONE only when the page visibly shows every place, value and item named in the goal (both ends of a route, the
+  converted amount, the opened result itself rather than a results list). Otherwise act."""
 
 
 def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):

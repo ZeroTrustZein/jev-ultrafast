@@ -12,12 +12,15 @@ import mimetypes
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from .agent import Agent
+from .contracts import GAVE_UP, evidence_holds, missing_goal_values, page_key
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
+from .questions import MAX_EARLY_CHECKS
 
 PLAN = """You prepare a task for a fast browser agent that can click, type, select, scroll, and attach the user's listed
 files to upload fields, but cannot read documents.
@@ -38,8 +41,26 @@ Return JSON:
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
   Copy values exactly. Never invent personal information; omit facts you do not have."""
 
-VERIFY = """You check whether a browser agent finished its goal. Given the goal and the final page, return JSON:
-{"done": true/false, "missing": "what is still not satisfied, or empty"}. Judge only visible evidence."""
+VERIFY = """You check whether a browser agent finished its goal. Given the goal and the current page, return JSON:
+{"done": true/false, "evidence": ["short exact quotes copied from the page text that prove each requirement"],
+ "missing": "what is still not satisfied, or empty"}.
+Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
+an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
+the opened result) must be visible as the main subject of the page (its heading or main content), not only in a
+link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false."""
+
+
+def verify(goal, page):
+    """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
+    content = json.dumps({"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"]})
+    check = ask(VERIFY, content)
+    proof = check.get("evidence")
+    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"]):
+        check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
+    absent = missing_goal_values(goal, page) if check.get("done") else []
+    if absent:
+        check = {**check, "done": False, "missing": f"Not shown on the page: {', '.join(absent)}"}
+    return check
 
 
 def ask(system, content):
@@ -114,12 +135,32 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
 
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
+        checked = set()
         for _ in range(rounds):
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
                         last = state["history"][-1] if state["history"] else {}
                         report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
+                        # The fast model often reaches the goal and keeps going. Check when a new URL appears.
+                        page_now = agent.state["page"]
+                        if (
+                            agent.state["status"] == "ready"
+                            and last.get("page_changed")
+                            and page_key(page_now) not in checked
+                            and len(checked) < MAX_EARLY_CHECKS
+                        ):
+                            checked.add(page_key(page_now))
+                            early = verify(goal, page_now)
+                            if early.get("done"):
+                                report(f"VERIFY early {early}")
+                                agent.stop(
+                                    "done",
+                                    "verified_done",
+                                    "The goal is visibly complete on this page.",
+                                    evidence=early.get("evidence"),
+                                )
+                                break
                 except MissingValue as missing:
                     prompt = f"The form needs your {missing.field}. What should I enter?"
                     report(f"❓ {prompt}")
@@ -131,11 +172,22 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             if agent.state.get("denied"):
                 return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
             if agent.state["status"] == "blocked":
-                # A verifier must not overrule the agent's own BLOCKED; only a DONE gets checked.
+                # A verifier must not overrule a refusal (BLOCKED, denied, crash). But a run that merely ran out of
+                # road (loop, budget) may be sitting on the finished page, so check that before calling it a failure.
                 stop = agent.state.get("stop_reason") or {}
+                if stop.get("code") in GAVE_UP:
+                    final = verify(goal, agent.state["page"])
+                    report(f"VERIFY after {stop['code']} {final}")
+                    if final.get("done"):
+                        agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
+                                   evidence=final.get("evidence"), after=stop["code"])
+                        return {**final, **agent.snapshot()}
                 return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
-            check = ask(VERIFY, json.dumps({"goal": goal, "url": page["url"], "page": page["text"]}))
+            if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
+                check = {"done": True, "missing": "", "evidence": agent.state["stop_reason"].get("evidence")}
+            else:
+                check = verify(goal, page)
             report(f"VERIFY {check}")
             if check.get("done"):
                 break
@@ -144,15 +196,27 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
         return {**check, **agent.snapshot()}
 
 
-def ensure_local_server(port=8791):
-    """Ensure the local distilled Laya server is serving if running in local mode."""
+def local_laya_port(default=8791):
+    """The port of a local Laya server: from TYPESAFE_BASE_URL when it points at this machine, else LAYA_PORT."""
+    parsed = urllib.parse.urlparse(os.environ.get("TYPESAFE_BASE_URL", ""))
+    if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port:
+        return parsed.port
+    return int(os.environ.get("LAYA_PORT") or default)
+
+
+def ensure_local_server(port=None):
+    """Ensure the local distilled Laya server is serving if running in local mode.
+
+    start.bat and .env may run Laya on another port (e.g. 8793). A local TYPESAFE_BASE_URL now counts as local
+    whatever its port, so the server is still checked and auto-started instead of being treated as remote.
+    """
     base = os.environ.get("TYPESAFE_BASE_URL", "").rstrip("/")
-    # Default to local 75ms distilled server unless user explicitly specified a remote URL
-    if not base or f":{port}" in base:
+    port = port or local_laya_port()
+    local = not base or urllib.parse.urlparse(base).hostname in {"127.0.0.1", "localhost"}
+    if local:
         base = f"http://127.0.0.1:{port}"
         os.environ["TYPESAFE_BASE_URL"] = base
         os.environ.setdefault("TYPESAFE_API_KEY", "local")
-    if f":{port}" in base:
         try:
             urllib.request.urlopen(f"{base}/v1/systemone", timeout=1)
             return
@@ -234,12 +298,14 @@ def main():
     parser.add_argument("--file", action="append", default=[], help="File the agent can upload to forms.")
     parser.add_argument("--url", help="Target URL (defaults to URL derived by planner).")
     parser.add_argument("--browser", choices=["chrome", "brave"], help="Browser to drive (default: auto).")
-    parser.add_argument("--local", action="store_true", help="Force local distilled Laya engine on port 8791.")
+    parser.add_argument(
+        "--local", action="store_true", help="Force the local distilled Laya engine (LAYA_PORT, default 8791)."
+    )
     args = parser.parse_args()
     if args.browser:
         os.environ["BROWSER"] = args.browser
     if args.local:
-        os.environ["TYPESAFE_BASE_URL"] = "http://127.0.0.1:8791"
+        os.environ["TYPESAFE_BASE_URL"] = f"http://127.0.0.1:{local_laya_port()}"
         os.environ["TYPESAFE_API_KEY"] = "local"
     ensure_local_server()
     if not args.request:

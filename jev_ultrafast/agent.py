@@ -1,13 +1,14 @@
 """The complete agent loop. Typed choices, observable state, bounded execution."""
 
 import base64
+import json
 import os
 import re
 import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
-from .model import action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
+from .model import MissingValue, action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
 # Irreversible or outward-facing clicks. Code-owned, so a model cannot talk its way past the gate.
@@ -58,6 +59,7 @@ class Agent:
             text_calls=[],
             elapsed_ms=0,
             started_at=None,
+            stop_reason=None,
             record=bool(self.record_dir),
         )
         if self.record_dir:
@@ -70,12 +72,40 @@ class Agent:
             "elements": action_space(self.state["page"]["actions"])[0],
         }
 
+    def stop(self, status, code, message, **details):
+        """End the run with a reason a person can read. Every stop goes through here, so none is silent."""
+        state = self.state
+        page = state.get("page") or {}
+        last = state["history"][-1] if state["history"] else {}
+        state["status"] = status
+        if state.get("started_at") is not None:
+            state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
+        state["stop_reason"] = {
+            "code": code,
+            "message": message,
+            "steps": len(state["history"]),
+            "url": page.get("url"),
+            "title": page.get("title"),
+            "last_action": last.get("action"),
+            **details,
+        }
+        path = os.environ.get("JEV_STOP_LOG")
+        if path:
+            try:
+                with open(path, "a", encoding="utf-8") as log:
+                    log.write(json.dumps({"goal": state["goal"], "status": status, **state["stop_reason"]}) + "\n")
+            except OSError:
+                pass
+        return self.snapshot()
+
     def command(self, name, body=None):
         body = body or {}
         state = self.state
         if name == "tick":
             try:
                 self.command("predict", {})
+                if state["status"] in {"done", "blocked"}:
+                    return self.snapshot()
                 return self.command("act", {"fingerprint": state["page"]["fingerprint"]})
             except StalePage:
                 state["decision"] = None
@@ -94,7 +124,12 @@ class Agent:
             if state["status"] in {"done", "blocked"}:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
-                raise ValueError("Reached the demo's model-call budget")
+                return self.stop(
+                    "blocked",
+                    "call_budget",
+                    f"Stopped after {len(state['decisions'])} model decisions without finishing "
+                    f"(limit {MAX_STEPS * 2}). The agent was probably going in circles.",
+                )
             gear2_on = os.environ.get("GEAR2", "1") == "1"
             if os.environ.get("JEV_LOG") and not state["page"].get("screenshot"):
                 # Teacher logs pair each decision with its pixels; no capture cost when not logging.
@@ -135,8 +170,9 @@ class Agent:
                     state["decision"] = gear2(
                         state["page"], state["goal"], state["history"], screenshot, reason=trigger_reason
                     )
-                except Exception:
+                except Exception as exc:
                     state["decision"]["gear"] = 1
+                    state["decision"]["gear2_error"] = f"{type(exc).__name__}: {exc}"
             elif "gear" not in state["decision"]:
                 state["decision"]["gear"] = 1
 
@@ -156,10 +192,19 @@ class Agent:
             state["decision"] = None
             selected = decision["choice"]
             if selected in {"DONE", "BLOCKED"}:
-                state["status"] = "done" if selected == "DONE" else "blocked"
                 state["plan_index"] = int(selected == "DONE")
-                state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
-                return self.snapshot()
+                gear = decision.get("gear", 1)
+                said = (decision.get("reason") or "").strip()
+                if selected == "DONE":
+                    message = "The agent decided the goal is complete."
+                    return self.stop("done", "done", message, gear=gear, model_reason=said)
+                who = "Both the fast model and the vision fallback" if gear == 2 else "The fast model"
+                message = f"{who} found no action that makes progress on this page."
+                if gear == 1 and os.environ.get("GEAR2", "1") != "1":
+                    message += " The vision fallback is switched off (GEAR2=0)."
+                if decision.get("gear2_error"):
+                    message += f" The vision fallback failed: {decision['gear2_error']}"
+                return self.stop("blocked", "model_blocked", message, gear=gear, model_reason=said)
             if selected == "CLICK_COORDS":
                 action = {
                     "id": "coords",
@@ -173,10 +218,13 @@ class Agent:
                 if not action:
                     action = next((a for a in page["actions"] if a["id"] == "wait"), None)
                     if not action:
-                        raise ValueError(f"Action '{selected}' not found on page")
+                        return self.stop(
+                            "blocked", "missing_target", f"The model picked '{selected}', which is not on the page."
+                        )
             if len(state["history"]) >= MAX_STEPS:
-                state["status"] = "blocked"
-                raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
+                return self.stop(
+                    "blocked", "step_limit", f"Reached the {MAX_STEPS}-action limit without finishing the goal."
+                )
             text, helper = None, None
             if action["kind"] == "fill":
                 if not state["browser"].fresh(page):
@@ -210,9 +258,10 @@ class Agent:
                 and SENSITIVE.search(action["label"])
             ):
                 if not self.approve(action):
-                    state["status"] = "blocked"
                     state["denied"] = action["label"]
-                    return self.snapshot()
+                    return self.stop(
+                        "blocked", "denied", f"You did not approve the sensitive click '{action['label']}'."
+                    )
             # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
@@ -263,7 +312,18 @@ class Agent:
             # A few WAITs cover slow loads; a long run of them on an unchanged page means there is no next step.
             waits = state["history"][-8:]
             idle = len(waits) == 8 and all(h["kind"] == "wait" and h["page_changed"] is False for h in waits)
-            state["status"] = "blocked" if stuck or idle else "ready"
+            if stuck:
+                return self.stop(
+                    "blocked",
+                    "loop",
+                    "Stuck: the last 3 actions did not change the page, even with the vision fallback. "
+                    f"Repeated: {', '.join(dict.fromkeys(h['action'] for h in repeated))}.",
+                )
+            if idle:
+                return self.stop(
+                    "blocked", "idle", "Waited 8 times in a row and the page never changed, so there was no next step."
+                )
+            state["status"] = "ready"
         else:
             raise ValueError("Unknown command")
         return self.snapshot()
@@ -287,6 +347,11 @@ class Agent:
             except StalePage:
                 time.sleep(0.3)
                 continue
+            except MissingValue:
+                raise  # The caller asks the user, then resumes.
+            except Exception as exc:
+                # A crash used to end the run with no reason in the panel. Record it as a stop instead.
+                yield self.stop("blocked", "error", f"The agent crashed: {type(exc).__name__}: {exc}")
 
     def close(self):
         self.browser.close()

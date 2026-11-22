@@ -883,3 +883,53 @@ def test_agent_screenshots_only_when_teacher_logging(runner, monkeypatch):
     monkeypatch.setenv("JEV_LOG", "unused.jsonl")
     runner.command("predict")
     assert runner.state["page"]["screenshot"] == "c2hvdA=="
+
+
+def click(action="e3"):
+    return {**decision(action), "operation": "CLICK"}
+
+
+def test_no_progress_loop_stops_with_reason(runner):
+    for _ in range(3):
+        runner.state["decision"] = {**click(), "gear": 2}
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    stop = runner.state["stop_reason"]
+    assert runner.state["status"] == "blocked" and stop["code"] == "loop"
+    assert "Go" in stop["message"] and stop["steps"] == 3 and stop["url"] == "https://example.test/"
+
+
+def test_blocked_choice_explains_which_gears_gave_up(runner):
+    blocked = {"choice": "BLOCKED", "operation": "BLOCKED", "gear": 2, "reason": "captcha"}
+    runner.state["decision"] = {**decision(), **blocked}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    stop = runner.state["stop_reason"]
+    assert stop["code"] == "model_blocked" and "vision fallback" in stop["message"]
+    assert stop["model_reason"] == "captcha"
+
+
+def test_step_limit_is_a_reasoned_stop_not_a_crash(runner):
+    runner.state["history"] = [{"page_changed": True, "kind": "click", "action": "x"}] * loop.MAX_STEPS
+    runner.state["decision"] = click()
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["stop_reason"]["code"] == "step_limit"
+    runner.state["browser"].act.assert_not_called()
+
+
+def test_crash_during_run_becomes_a_stop_reason(runner, monkeypatch, tmp_path):
+    log = tmp_path / "stops.jsonl"
+    monkeypatch.setenv("JEV_STOP_LOG", str(log))
+    monkeypatch.setenv("GEAR2", "0")
+    runner.state["status"] = "ready"
+    monkeypatch.setattr(loop, "choose", Mock(side_effect=ConnectionError("gateway down")))
+    states = list(runner.run())
+    assert states[-1]["stop_reason"]["code"] == "error" and "gateway down" in states[-1]["stop_reason"]["message"]
+    assert json.loads(log.read_text(encoding="utf-8"))["code"] == "error"
+
+
+def test_missing_value_still_reaches_the_caller(runner, monkeypatch):
+    monkeypatch.setenv("GEAR2", "0")
+    runner.state["status"] = "ready"
+    monkeypatch.setattr(loop, "choose", Mock(return_value=decision()))
+    monkeypatch.setattr(loop, "field_text", Mock(side_effect=model.MissingValue("Email")))
+    with pytest.raises(model.MissingValue):
+        list(runner.run())

@@ -405,22 +405,14 @@ class AssistBridge:
                                     )
                                     break
                                 elif agent.state["status"] == "blocked":
-                                    reason = agent.state.get("denied")
-                                    if reason:
-                                        msg = f"\n\n⛔ **Stopped:** Sensitive action '{reason}' was not approved."
-                                    elif len(agent.state.get("history", [])) >= MAX_STEPS:
-                                        msg = f"\n\n⛔ **Stopped:** Reached maximum action limit ({MAX_STEPS} steps)."
-                                    else:
-                                        last_dec = (agent.state.get("decisions") or [{}])[-1]
-                                        specific_reason = last_dec.get("reason")
-                                        if specific_reason:
-                                            msg = f"\n\n⚠️ **Paused/Blocked:** {specific_reason}"
-                                        else:
-                                            msg = (
-                                                f"\n\n⚠️ **Paused/Blocked:** Could not proceed further on "
-                                                f"[{final_page.get('title')}]({final_page.get('url')}). "
-                                                "Check if a CAPTCHA, login, or manual action is required."
-                                            )
+                                    stop = agent.state.get("stop_reason") or {}
+                                    where = f"[{final_page.get('title')}]({final_page.get('url')})"
+                                    msg = (
+                                        f"\n\n⛔ **Stopped after {stop.get('steps', 0)} steps on {where}:** "
+                                        f"{stop.get('message') or 'No reason was recorded.'}"
+                                    )
+                                    if stop.get("model_reason"):
+                                        msg += f"\n\nModel note: {stop['model_reason']}"
                                     asst_msg["content"] += msg
                                     break
 

@@ -132,7 +132,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
             if agent.state["status"] == "blocked":
                 # A verifier must not overrule the agent's own BLOCKED; only a DONE gets checked.
-                return {"done": False, "missing": "Agent blocked", **agent.snapshot()}
+                stop = agent.state.get("stop_reason") or {}
+                return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
             check = ask(VERIFY, json.dumps({"goal": goal, "url": page["url"], "page": page["text"]}))
             report(f"VERIFY {check}")

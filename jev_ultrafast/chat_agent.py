@@ -164,7 +164,8 @@ Evaluate visible evidence (page title, URL, visible text) against the USER GOAL.
 Return JSON:
 {
   "completed": true/false (true ONLY if the goal is visibly satisfied; false if stopped on a generic homepage,
-    search listing, category/topic page, login or error page, or intermediate page),
+    search listing, category/topic page, login or error page, or intermediate page; the requested item must be
+    the page's main subject, not just a link, recent-searches chip or sidebar entry),
   "evidence": ["short exact quotes copied from the page text that prove each requirement; empty if not completed"],
   "summary": "2-4 clean markdown bullet points of what was reached or found, what remains to be done, and immediate next action. Under 100 words. No fluff."
 }"""
@@ -206,7 +207,7 @@ def synthesize_outcome(goal, page):
             comp = bool(data.get("completed", False))
             summ = str(data.get("summary") or fallback_summary).strip()
             evidence = data.get("evidence")
-            if comp and not evidence_holds(evidence, page.get("text")):
+            if comp and not evidence_holds(evidence, page.get("text"), page.get("title"), page.get("url")):
                 # The model claimed success without quoting proof that is really on the page.
                 comp = False
                 summ += "\n\n(Not confirmed: no visible proof on the page.)"

@@ -83,6 +83,24 @@ class Agent:
             "elements": action_space(self.state["page"]["actions"])[0],
         }
 
+    def without_dead_ends(self, page):
+        """The page as the models see it, minus targets that already did nothing twice on this URL.
+
+        Benchmarks showed loops on widgets (date pickers, nav chips, autocompletes): the same click, no page change,
+        again and again. Hiding a proven no-op forces a different route, such as typing into the field instead.
+        """
+        counts = {}
+        for h in self.state["history"]:
+            if h.get("page_changed") is False and h.get("kind") not in {"wait", "fill"} and h.get("url") == page["url"]:
+                counts[h["action"]] = counts.get(h["action"], 0) + 1
+        dead = {label for label, n in counts.items() if n >= 2}
+        if not dead:
+            return page
+        kept = [a for a in page["actions"] if a.get("kind") == "wait" or a.get("label") not in dead]
+        if not any(a.get("kind") != "wait" for a in kept):
+            return page  # Never hide everything; let the stop rules decide instead.
+        return {**page, "actions": kept, "dead_ends": sorted(dead)}
+
     def stop(self, status, code, message, **details):
         """End the run with a reason a person can read. Every stop goes through here, so none is silent."""
         state = self.state
@@ -167,12 +185,16 @@ class Agent:
                 state["decision"] = None
             try:
                 if state["decision"] is None:
-                    state["decision"] = choose(state["page"], state["goal"], state["history"])
+                    state["decision"] = choose(self.without_dead_ends(state["page"]), state["goal"], state["history"])
             except Exception as exc:
                 if gear2_on:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
                     state["decision"] = gear2(
-                        state["page"], state["goal"], state["history"], screenshot, reason=f"gear 1 error: {exc}"
+                        self.without_dead_ends(state["page"]),
+                        state["goal"],
+                        state["history"],
+                        screenshot,
+                        reason=f"gear 1 error: {exc}",
                     )
                 else:
                     raise
@@ -196,7 +218,11 @@ class Agent:
                 try:
                     screenshot = state["browser"].call("Page.captureScreenshot", format="jpeg", quality=60)["data"]
                     state["decision"] = gear2(
-                        state["page"], state["goal"], state["history"], screenshot, reason=trigger_reason
+                        self.without_dead_ends(state["page"]),
+                        state["goal"],
+                        state["history"],
+                        screenshot,
+                        reason=trigger_reason,
                     )
                 except Exception as exc:
                     state["decision"]["gear"] = 1

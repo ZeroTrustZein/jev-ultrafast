@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .agent import Agent
 from .chat_agent import chat_turn
+from .contracts import GAVE_UP, page_key
 from .model import MissingValue
 from .questions import MAX_EARLY_CHECKS, MAX_STEPS
 
@@ -345,12 +346,12 @@ class AssistBridge:
                                             if (
                                                 agent.state["status"] == "ready"
                                                 and last_h.get("page_changed")
-                                                and page_now.get("url") not in checked_urls
+                                                and page_key(page_now) not in checked_urls
                                                 and len(checked_urls) < MAX_EARLY_CHECKS
                                             ):
                                                 from .chat_agent import synthesize_outcome
 
-                                                checked_urls.add(page_now.get("url"))
+                                                checked_urls.add(page_key(page_now))
                                                 early = synthesize_outcome(agent.state["goal"], page_now)
                                                 if early.get("completed"):
                                                     agent.stop(
@@ -432,6 +433,17 @@ class AssistBridge:
                                     break
                                 elif agent.state["status"] == "blocked":
                                     stop = agent.state.get("stop_reason") or {}
+                                    if stop.get("code") in GAVE_UP:
+                                        # Ran out of road, not refused: the goal may already be on screen.
+                                        from .chat_agent import synthesize_outcome
+
+                                        final = synthesize_outcome(agent.state["goal"], final_page)
+                                        if final.get("completed"):
+                                            asst_msg["content"] += (
+                                                f"\n\n✅ **Completed!** Finished on page: [{final_page.get('title')}]"
+                                                f"({final_page.get('url')})\n\n{final.get('summary', '')}"
+                                            )
+                                            break
                                     where = f"[{final_page.get('title')}]({final_page.get('url')})"
                                     msg = (
                                         f"\n\n⛔ **Stopped after {stop.get('steps', 0)} steps on {where}:** "

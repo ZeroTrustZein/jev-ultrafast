@@ -1066,3 +1066,55 @@ def test_outcome_check_needs_quoted_proof(monkeypatch):
     unconverted = {**page(), "text": "Currency converter"}
     assert chat_agent.synthesize_outcome("Convert 100 EUR", unconverted)["completed"] is False
     assert chat_agent.synthesize_outcome("Convert 100 EUR", {**page(), "text": "= 108.43 USD"})["completed"] is True
+
+
+def test_evidence_matches_title_and_ignores_punctuation():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "Filter by\nRepositories 1.2k\nmicrosoft/playwright"
+    title = "Repositories search results - playwright"
+    assert evidence_holds(["repositories Search Results · playwright"], text, title)
+    assert evidence_holds(["microsoft/playwright ... Repositories"], text)
+    assert not evidence_holds(["London, England"], text, "Berlin-Mitte Weather")
+
+
+def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = loop.Agent.__new__(loop.Agent)
+    done_page = {**page(), "url": "https://maps.test/dir", "text": "Route: 12 min via A1"}
+    agent.state = {"status": "blocked", "page": done_page, "history": [], "goal": "Get directions"}
+    agent.state.update(started_at=None, elapsed_ms=0, stop_reason={"code": "call_budget", "message": "budget"})
+    agent.run = lambda: iter(())
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [{"url": "https://maps.test/", "goal": "Get directions", "profile": {}},
+               {"done": True, "evidence": ["Route: 12 min"], "missing": ""}]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Get directions", report=lambda _: None)
+    assert result["done"] is True and agent.state["stop_reason"]["after"] == "call_budget"
+
+
+def test_planner_never_overrules_a_refusal(monkeypatch):
+    from jev_ultrafast import planner
+
+    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "model_blocked", "message": "no"}})
+    fake.snapshot = Mock(return_value={"page": page()})
+    fake.__enter__ = Mock(return_value=fake)
+    fake.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(planner, "Agent", Mock(return_value=fake))
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    ask = Mock(return_value={"url": "https://example.test/", "goal": "Find a book", "profile": {}})
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 1
+
+
+def test_target_that_did_nothing_twice_is_hidden(runner):
+    for _ in range(2):
+        runner.state["history"].append(
+            {"action": "Go", "kind": "click", "page_changed": False, "url": runner.state["page"]["url"]}
+        )
+    seen = runner.without_dead_ends(runner.state["page"])
+    assert "Go" not in {a["label"] for a in seen["actions"]} and seen["dead_ends"] == ["Go"]
+    assert any(a["label"] == "Go" for a in runner.state["page"]["actions"])  # the real page is untouched

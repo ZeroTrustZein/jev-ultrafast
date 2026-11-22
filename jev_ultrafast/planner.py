@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
-from .contracts import evidence_holds
+from .contracts import GAVE_UP, evidence_holds, page_key
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
@@ -46,14 +46,16 @@ VERIFY = """You check whether a browser agent finished its goal. Given the goal 
  "missing": "what is still not satisfied, or empty"}.
 Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
 an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
-the opened result) must be visible. Quote evidence verbatim; if you cannot quote it, done is false."""
+the opened result) must be visible as the main subject of the page (its heading or main content), not only in a
+link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false."""
 
 
 def verify(goal, page):
     """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
     content = json.dumps({"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"]})
     check = ask(VERIFY, content)
-    if check.get("done") and not evidence_holds(check.get("evidence"), page.get("text")):
+    proof = check.get("evidence")
+    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"]):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
     return check
 
@@ -142,10 +144,10 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         if (
                             agent.state["status"] == "ready"
                             and last.get("page_changed")
-                            and page_now["url"] not in checked
+                            and page_key(page_now) not in checked
                             and len(checked) < MAX_EARLY_CHECKS
                         ):
-                            checked.add(page_now["url"])
+                            checked.add(page_key(page_now))
                             early = verify(goal, page_now)
                             if early.get("done"):
                                 report(f"VERIFY early {early}")
@@ -167,8 +169,16 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             if agent.state.get("denied"):
                 return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
             if agent.state["status"] == "blocked":
-                # A verifier must not overrule the agent's own BLOCKED; only a DONE gets checked.
+                # A verifier must not overrule a refusal (BLOCKED, denied, crash). But a run that merely ran out of
+                # road (loop, budget) may be sitting on the finished page, so check that before calling it a failure.
                 stop = agent.state.get("stop_reason") or {}
+                if stop.get("code") in GAVE_UP:
+                    final = verify(goal, agent.state["page"])
+                    report(f"VERIFY after {stop['code']} {final}")
+                    if final.get("done"):
+                        agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
+                                   evidence=final.get("evidence"), after=stop["code"])
+                        return {**final, **agent.snapshot()}
                 return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
             if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":

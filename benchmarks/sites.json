@@ -149,10 +149,11 @@
       "max_steps": 12,
       "success": {
         "url_contains": [
-          "weather.com"
+          "weather.com/weather/"
         ],
         "text_any": [
-          "London"
+          "London, England",
+          "London, Greater London"
         ]
       }
     },

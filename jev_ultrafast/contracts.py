@@ -3,8 +3,9 @@
 Locked pre-flight contract across Subagents Alpha through Zeta.
 """
 
-from dataclasses import dataclass, asdict
-from typing import Optional, List, Dict, Any
+import re
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -63,16 +64,32 @@ class OutcomeEvaluation:
         )
 
 
-def evidence_holds(evidence, page_text) -> bool:
+# Stop states where the agent ran out of road, not ones where it refused: the goal may already be on screen.
+GAVE_UP = {"loop", "call_budget", "step_limit", "idle"}
+
+
+def _plain(text) -> str:
+    """Lowercase words only, so quotes survive punctuation and whitespace differences ("·", "-", line breaks)."""
+    return " ".join(re.sub(r"[^\w]+", " ", str(text or "").lower()).split())
+
+
+def evidence_holds(evidence, page_text, *also) -> bool:
     """A verifier's "done" counts only if every quoted piece of evidence is really on the page.
 
     Verifiers approved pages that did not satisfy the goal (xe.com with no conversion, a GitHub topics page).
-    Requiring verbatim quotes that code can find keeps a model from approving what is not visible.
+    Requiring quotes that code can find keeps a model from approving what is not visible. The page title and URL
+    count as page content too (the verifier sees them), and a quote with "..." must match piece by piece.
     """
     quotes = [evidence] if isinstance(evidence, str) else list(evidence or [])
-    quotes = [" ".join(str(q).split()).lower() for q in quotes if str(q).strip()]
-    text = " ".join(str(page_text or "").split()).lower()
-    return bool(quotes) and all(len(q) >= 3 and q in text for q in quotes)
+    pieces = [_plain(p) for q in quotes for p in re.split(r"\.\.\.|…", str(q))]
+    pieces = [p for p in pieces if p]
+    text = _plain(" ".join(str(t or "") for t in (page_text, *also)))
+    return bool(pieces) and all(len(p) >= 3 and p in text for p in pieces)
+
+
+def page_key(page) -> tuple:
+    """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
+    return (page.get("url"), hash(str(page.get("text") or "")[:3000]))
 
 
 def normalize_subgoals(plan_data: Dict[str, Any], user_text: str = "") -> List[SubGoal]:

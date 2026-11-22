@@ -87,6 +87,37 @@ def evidence_holds(evidence, page_text, *also) -> bool:
     return bool(pieces) and all(len(p) >= 3 and p in text for p in pieces)
 
 
+_DATE_LIKE = re.compile(r"^[\d\s./:-]+$")
+_STOP = {"the", "and", "for", "from", "with", "page", "search", "results"}
+
+
+def goal_values(goal) -> list:
+    """Concrete values the goal quotes ('Louvre Museum, Paris', 'usb-c cable'). Numeric dates are skipped: sites
+    render them in their own format."""
+    # Quote marks must not touch letters, so apostrophes ("user's", "don't") never open or close a value.
+    values = re.findall(r"(?<!\w)['\"‘“]([^'\"’”]{2,80})['\"’”](?!\w)", str(goal or ""))
+    return [v for v in values if not _DATE_LIKE.match(v)]
+
+
+def missing_goal_values(goal, page) -> list:
+    """Quoted goal values with no trace on the page (text, title, URL or field values).
+
+    A value counts as present when at least half of its meaningful words appear. Substring matching tolerates
+    localisation such as 'Eiffel' inside 'Eiffelturm'. The Google Maps verifier accepted a route that never
+    showed the destination; this catches that without asking a model.
+    """
+    fields = " ".join(str(a.get("value") or "") for a in page.get("actions", []))
+    hay = _plain(" ".join(str(page.get(k) or "") for k in ("text", "title", "url")) + " " + fields)
+    hay_compact = hay.replace(" ", "")
+    missing = []
+    for value in goal_values(goal):
+        words = [w for w in _plain(value).split() if len(w) >= 3 and w not in _STOP] or _plain(value).split()
+        found = sum(1 for w in words if w in hay or w in hay_compact)
+        if words and found * 2 < len(words):
+            missing.append(value)
+    return missing
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

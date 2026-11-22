@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from .contracts import OutcomeEvaluation, SubGoal, evidence_holds, normalize_subgoals
+from .contracts import OutcomeEvaluation, SubGoal, evidence_holds, missing_goal_values, normalize_subgoals
 from .model import json_content, post_json
 
 CHAT_SYSTEM = """You are Jev Assist, an AI browser co-pilot and conversational agent. You help users
@@ -211,6 +211,10 @@ def synthesize_outcome(goal, page):
                 # The model claimed success without quoting proof that is really on the page.
                 comp = False
                 summ += "\n\n(Not confirmed: no visible proof on the page.)"
+            absent = missing_goal_values(goal, page) if comp else []
+            if absent:
+                comp = False
+                summ += f"\n\n(Not confirmed: the page doesn't show {', '.join(absent)}.)"
             return {"completed": comp, "summary": summ, "evidence": evidence if comp else None}
         return {"completed": False, "summary": str(data).strip()}
     except Exception as exc:

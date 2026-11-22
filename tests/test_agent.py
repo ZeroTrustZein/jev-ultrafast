@@ -1118,3 +1118,30 @@ def test_target_that_did_nothing_twice_is_hidden(runner):
     seen = runner.without_dead_ends(runner.state["page"])
     assert "Go" not in {a["label"] for a in seen["actions"]} and seen["dead_ends"] == ["Go"]
     assert any(a["label"] == "Go" for a in runner.state["page"]["actions"])  # the real page is untouched
+
+
+def test_goal_values_ignore_apostrophes_and_dates():
+    from jev_ultrafast.contracts import goal_values
+
+    goal = "Find the user's flight from 'Berlin' on '2027-01-15', don't book. Check 'Paris'"
+    assert goal_values(goal) == ["Berlin", "Paris"]
+
+
+def test_route_without_the_destination_is_not_done(monkeypatch):
+    from jev_ultrafast import planner
+
+    goal = "Get directions from 'Eiffel Tower, Paris' to 'Louvre Museum, Paris'"
+    route = {**page(), "url": "https://maps.test/dir/Eiffelturm/48.85,2.29/", "text": "Eiffelturm 6 min 400 m Paris"}
+    monkeypatch.setattr(planner, "ask", Mock(return_value={"done": True, "evidence": ["Eiffelturm", "6 min 400 m"]}))
+    check = planner.verify(goal, route)
+    assert check["done"] is False and "Louvre" in check["missing"]
+    route["text"] += " Louvre Museum 25 min"
+    assert planner.verify(goal, route)["done"] is True
+
+
+def test_typed_field_values_count_as_on_the_page():
+    from jev_ultrafast.contracts import missing_goal_values
+
+    form = {**page(), "text": "Student Registration Form First Name"}
+    form["actions"] = [{**page()["actions"][0], "value": "Test"}]
+    assert missing_goal_values("Fill First Name 'Test'", form) == []

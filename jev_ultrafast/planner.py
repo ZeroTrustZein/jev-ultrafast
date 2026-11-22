@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
-from .contracts import GAVE_UP, evidence_holds, page_key
+from .contracts import GAVE_UP, evidence_holds, missing_goal_values, page_key
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
@@ -57,6 +57,9 @@ def verify(goal, page):
     proof = check.get("evidence")
     if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"]):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
+    absent = missing_goal_values(goal, page) if check.get("done") else []
+    if absent:
+        check = {**check, "done": False, "missing": f"Not shown on the page: {', '.join(absent)}"}
     return check
 
 

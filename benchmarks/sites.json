@@ -49,7 +49,7 @@
         "url_any": [
           "/dir/"
         ],
-        "text_any": [
+        "text_all": [
           "Louvre",
           "Eiffel"
         ]
@@ -149,11 +149,14 @@
       "max_steps": 12,
       "success": {
         "url_contains": [
-          "weather.com/weather/"
+          "weather.com"
+        ],
+        "url_any": [
+          "/weather/",
+          "/city/london/"
         ],
         "text_any": [
-          "London, England",
-          "London, Greater London"
+          "London, England"
         ]
       }
     },

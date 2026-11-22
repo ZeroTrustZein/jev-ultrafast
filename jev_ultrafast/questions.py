@@ -34,3 +34,5 @@ If "files" is given, return exactly one of those file names for this upload fiel
 If a required value is missing, return {"text": null}. Otherwise return {"text": "the field value"}."""
 
 MAX_STEPS = 60
+# Mid-run "is the goal already reached?" checks per run, one per newly reached URL.
+MAX_EARLY_CHECKS = 6

@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from .contracts import SubGoal, OutcomeEvaluation, normalize_subgoals
+from .contracts import OutcomeEvaluation, SubGoal, evidence_holds, normalize_subgoals
 from .model import json_content, post_json
 
 CHAT_SYSTEM = """You are Jev Assist, an AI browser co-pilot and conversational agent. You help users
@@ -163,7 +163,9 @@ SYNTHESIS_SYSTEM = """You are Jev Assist. The browser agent ran on a page pursui
 Evaluate visible evidence (page title, URL, visible text) against the USER GOAL.
 Return JSON:
 {
-  "completed": true/false (true ONLY if the goal is visibly satisfied; false if stopped on a generic homepage, search listing, or intermediate page),
+  "completed": true/false (true ONLY if the goal is visibly satisfied; false if stopped on a generic homepage,
+    search listing, category/topic page, login or error page, or intermediate page),
+  "evidence": ["short exact quotes copied from the page text that prove each requirement; empty if not completed"],
   "summary": "2-4 clean markdown bullet points of what was reached or found, what remains to be done, and immediate next action. Under 100 words. No fluff."
 }"""
 
@@ -171,7 +173,8 @@ Return JSON:
 def synthesize_outcome(goal, page):
     fallback_summary = f"Finished on page: [{page.get('title', 'Page')}]({page.get('url', '')})" if page else "Done"
     if not page or not page.get("text"):
-        return {"completed": True, "summary": fallback_summary}
+        note = "The page shows no text, so success can't be checked."
+        return {"completed": False, "summary": f"{fallback_summary}\n\n{note}"}
     base = (
         os.environ.get("PLANNER_BASE_URL") or os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128")
     ).rstrip("/")
@@ -187,7 +190,7 @@ def synthesize_outcome(goal, page):
     try:
         synth_body = {
             "model": model,
-            "max_tokens": 300,
+            "max_tokens": 500,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": SYNTHESIS_SYSTEM},
@@ -200,9 +203,14 @@ def synthesize_outcome(goal, page):
         res = post_json(base + "/chat/completions", key, synth_body)
         data = json_content(res)
         if isinstance(data, dict):
-            comp = data.get("completed", True)
-            summ = data.get("summary") or fallback_summary
-            return {"completed": bool(comp), "summary": str(summ).strip()}
-        return {"completed": True, "summary": str(data).strip()}
-    except Exception:
-        return {"completed": True, "summary": fallback_summary}
+            comp = bool(data.get("completed", False))
+            summ = str(data.get("summary") or fallback_summary).strip()
+            evidence = data.get("evidence")
+            if comp and not evidence_holds(evidence, page.get("text")):
+                # The model claimed success without quoting proof that is really on the page.
+                comp = False
+                summ += "\n\n(Not confirmed: no visible proof on the page.)"
+            return {"completed": comp, "summary": summ, "evidence": evidence if comp else None}
+        return {"completed": False, "summary": str(data).strip()}
+    except Exception as exc:
+        return {"completed": False, "summary": f"{fallback_summary}\n\nCould not check the result: {exc}"}

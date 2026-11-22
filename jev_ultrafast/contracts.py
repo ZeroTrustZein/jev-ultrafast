@@ -63,6 +63,18 @@ class OutcomeEvaluation:
         )
 
 
+def evidence_holds(evidence, page_text) -> bool:
+    """A verifier's "done" counts only if every quoted piece of evidence is really on the page.
+
+    Verifiers approved pages that did not satisfy the goal (xe.com with no conversion, a GitHub topics page).
+    Requiring verbatim quotes that code can find keeps a model from approving what is not visible.
+    """
+    quotes = [evidence] if isinstance(evidence, str) else list(evidence or [])
+    quotes = [" ".join(str(q).split()).lower() for q in quotes if str(q).strip()]
+    text = " ".join(str(page_text or "").split()).lower()
+    return bool(quotes) and all(len(q) >= 3 and q in text for q in quotes)
+
+
 def normalize_subgoals(plan_data: Dict[str, Any], user_text: str = "") -> List[SubGoal]:
     """Parse sub_goals from plan data with backward-compatibility for legacy single goals."""
     sub_goals_raw = plan_data.get("sub_goals")

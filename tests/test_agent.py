@@ -993,3 +993,76 @@ def test_local_laya_port_follows_env(monkeypatch):
     monkeypatch.delenv("TYPESAFE_BASE_URL")
     monkeypatch.setenv("LAYA_PORT", "8800")
     assert planner.local_laya_port() == 8800
+
+
+@pytest.mark.parametrize(
+    "label, gated",
+    [
+        ("Submit search", False),
+        ("Dismiss sign-in info.", False),
+        ("Sign in", True),
+        ("Submit application", True),
+        ("Cancel order", True),
+        ("Place order", True),
+        ("Search", False),
+    ],
+)
+def test_safety_gate_skips_harmless_clicks_only(label, gated):
+    assert loop.sensitive(label) is gated
+
+
+def test_evidence_must_be_on_the_page():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "100 EUR =\n 108.43  USD   Mid-market rate"
+    assert evidence_holds(["100 EUR = 108.43 USD"], text)
+    assert not evidence_holds(["100 EUR = 109.00 USD"], text)
+    assert not evidence_holds([], text) and not evidence_holds(None, text)
+
+
+def test_planner_rejects_done_without_visible_evidence(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setattr(planner, "ask", Mock(return_value={"done": True, "evidence": ["Banana bread recipe"]}))
+    bread = {**page(), "text": "Bread category"}
+    assert planner.verify("Open a banana bread recipe", bread)["done"] is False
+    planner.ask.return_value = {"done": True, "evidence": ["Bread category"]}
+    assert planner.verify("Open the bread category", bread)["done"] is True
+
+
+def test_planner_stops_early_once_goal_is_visible(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = loop.Agent.__new__(loop.Agent)
+    target = {**page(), "url": "https://example.test/book", "text": "The Book page"}
+    agent.state = {"status": "ready", "page": page(), "history": [], "goal": "Open the book"}
+    agent.state.update(started_at=None, elapsed_ms=0)
+
+    def run():
+        agent.state["history"].append({"action": "Go", "page_changed": True})
+        agent.state["page"] = target
+        yield agent.snapshot()
+        raise AssertionError("kept running after the goal was verified")
+
+    agent.run = run
+    agent.snapshot = lambda: dict(agent.state)
+    agent.__enter__ = lambda *_: agent
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [{"url": "https://example.test/", "goal": "Open the book", "profile": {}},
+               {"done": True, "evidence": ["The Book page"], "missing": ""}]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Open the book", report=lambda _: None)
+    assert result["done"] is True and agent.state["stop_reason"]["code"] == "verified_done"
+    assert planner.ask.call_count == 2  # no second verification after the early one
+
+
+def test_outcome_check_needs_quoted_proof(monkeypatch):
+    from jev_ultrafast import chat_agent
+
+    reply = '{"completed": true, "summary": "Converted", "evidence": ["108.43 USD"]}'
+    monkeypatch.setattr(chat_agent, "post_json", lambda *_: {"choices": [{"message": {"content": reply}}]})
+    unconverted = {**page(), "text": "Currency converter"}
+    assert chat_agent.synthesize_outcome("Convert 100 EUR", unconverted)["completed"] is False
+    assert chat_agent.synthesize_outcome("Convert 100 EUR", {**page(), "text": "= 108.43 USD"})["completed"] is True

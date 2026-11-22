@@ -13,6 +13,17 @@ from .questions import MAX_STEPS
 
 # Irreversible or outward-facing clicks. Code-owned, so a model cannot talk its way past the gate.
 SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign|apply|delete|checkout)\b", re.I)
+# Always gated, whatever else the label says ("Cancel order" still cancels an order).
+IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|checkout)\b", re.I)
+# Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
+HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
+
+
+def sensitive(label):
+    label = label or ""
+    if IRREVERSIBLE.search(label):
+        return True
+    return bool(SENSITIVE.search(label)) and not HARMLESS.search(label)
 
 
 def gear2(page, goal, history, screenshot, reason):
@@ -272,7 +283,7 @@ class Agent:
                 self.approve
                 and gated
                 and action["kind"] in {"click", "select", "coords"}
-                and SENSITIVE.search(action["label"])
+                and sensitive(action["label"])
             ):
                 if not self.approve(action):
                     state["denied"] = action["label"]

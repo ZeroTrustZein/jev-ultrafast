@@ -17,8 +17,10 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
+from .contracts import evidence_holds
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
+from .questions import MAX_EARLY_CHECKS
 
 PLAN = """You prepare a task for a fast browser agent that can click, type, select, scroll, and attach the user's listed
 files to upload fields, but cannot read documents.
@@ -39,8 +41,21 @@ Return JSON:
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
   Copy values exactly. Never invent personal information; omit facts you do not have."""
 
-VERIFY = """You check whether a browser agent finished its goal. Given the goal and the final page, return JSON:
-{"done": true/false, "missing": "what is still not satisfied, or empty"}. Judge only visible evidence."""
+VERIFY = """You check whether a browser agent finished its goal. Given the goal and the current page, return JSON:
+{"done": true/false, "evidence": ["short exact quotes copied from the page text that prove each requirement"],
+ "missing": "what is still not satisfied, or empty"}.
+Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
+an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
+the opened result) must be visible. Quote evidence verbatim; if you cannot quote it, done is false."""
+
+
+def verify(goal, page):
+    """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
+    content = json.dumps({"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"]})
+    check = ask(VERIFY, content)
+    if check.get("done") and not evidence_holds(check.get("evidence"), page.get("text")):
+        check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
+    return check
 
 
 def ask(system, content):
@@ -115,12 +130,32 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
 
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
+        checked = set()
         for _ in range(rounds):
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
                         last = state["history"][-1] if state["history"] else {}
                         report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
+                        # The fast model often reaches the goal and keeps going. Check when a new URL appears.
+                        page_now = agent.state["page"]
+                        if (
+                            agent.state["status"] == "ready"
+                            and last.get("page_changed")
+                            and page_now["url"] not in checked
+                            and len(checked) < MAX_EARLY_CHECKS
+                        ):
+                            checked.add(page_now["url"])
+                            early = verify(goal, page_now)
+                            if early.get("done"):
+                                report(f"VERIFY early {early}")
+                                agent.stop(
+                                    "done",
+                                    "verified_done",
+                                    "The goal is visibly complete on this page.",
+                                    evidence=early.get("evidence"),
+                                )
+                                break
                 except MissingValue as missing:
                     prompt = f"The form needs your {missing.field}. What should I enter?"
                     report(f"❓ {prompt}")
@@ -136,7 +171,10 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 stop = agent.state.get("stop_reason") or {}
                 return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
-            check = ask(VERIFY, json.dumps({"goal": goal, "url": page["url"], "page": page["text"]}))
+            if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
+                check = {"done": True, "missing": "", "evidence": agent.state["stop_reason"].get("evidence")}
+            else:
+                check = verify(goal, page)
             report(f"VERIFY {check}")
             if check.get("done"):
                 break

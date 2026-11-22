@@ -425,7 +425,7 @@ def test_planner_never_verifies_a_blocked_run(monkeypatch):
     fake.__exit__ = Mock(return_value=False)
     monkeypatch.setattr(planner, "Agent", Mock(return_value=fake))
     result = planner.run("Find a book", report=lambda _: None)
-    assert result["done"] is False and asked == [planner.PLAN]
+    assert result["done"] is False and asked == [planner.PLAN, planner.VERIFY]  # only the arrival check
 
 
 def test_fenced_json_reply_is_accepted(monkeypatch):
@@ -1051,11 +1051,12 @@ def test_planner_stops_early_once_goal_is_visible(monkeypatch):
     monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     replies = [{"url": "https://example.test/", "goal": "Open the book", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival check on the start page
                {"done": True, "evidence": ["The Book page"], "missing": ""}]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Open the book", report=lambda _: None)
     assert result["done"] is True and agent.state["stop_reason"]["code"] == "verified_done"
-    assert planner.ask.call_count == 2  # no second verification after the early one
+    assert planner.ask.call_count == 3  # plan, arrival, early; no second verification after the early one
 
 
 def test_outcome_check_needs_quoted_proof(monkeypatch):
@@ -1090,6 +1091,7 @@ def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
     monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     replies = [{"url": "https://maps.test/", "goal": "Get directions", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
                {"done": True, "evidence": ["Route: 12 min"], "missing": ""}]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Get directions", report=lambda _: None)
@@ -1107,7 +1109,7 @@ def test_planner_never_overrules_a_refusal(monkeypatch):
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     ask = Mock(return_value={"url": "https://example.test/", "goal": "Find a book", "profile": {}})
     monkeypatch.setattr(planner, "ask", ask)
-    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 1
+    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 2  # plan, arrival
 
 
 def test_target_that_did_nothing_twice_is_hidden(runner):
@@ -1194,10 +1196,36 @@ def test_planner_retries_a_stuck_run_on_a_new_route(monkeypatch):
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     replies = [
         {"url": "https://example.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
         {"done": False, "evidence": [], "missing": "no book"},  # verify after the loop
         {"action": "retry", "url": "https://example.test/search?q=book", "goal": "Use search", "why": "loop"},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check on the recovery URL
         {"done": True, "evidence": ["Search"], "missing": ""},  # final verify on the new route
     ]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Find a book", report=lambda _: None)
     assert result["done"] is True and agent.state["attempts"][0]["stop"] == "loop"
+
+
+def test_every_requirement_must_be_met_and_quoted(monkeypatch):
+    from jev_ultrafast import planner
+
+    xe = {**page(), "url": "https://xe.test/convert/?Amount=100&From=EUR&To=INR", "text": "100.00 EUR = 9,712 INR"}
+    reply = {
+        "done": True,
+        "requirements": [
+            {"need": "amount 100", "met": True, "quote": "100.00 EUR"},
+            {"need": "from USD", "met": False, "quote": ""},
+            {"need": "to EUR", "met": True, "quote": "EUR"},
+        ],
+    }
+    monkeypatch.setattr(planner, "ask", Mock(return_value=reply))
+    check = planner.verify("Convert 100 US Dollars to Euros", xe)
+    assert check["done"] is False and "from USD" in check["missing"]
+
+
+def test_session_ids_never_repeat():
+    from jev_ultrafast.bridge import new_session_id
+
+    ids = {new_session_id() for _ in range(50)}
+    assert len(ids) == 50

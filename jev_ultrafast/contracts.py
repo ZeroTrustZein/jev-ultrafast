@@ -118,6 +118,23 @@ def missing_goal_values(goal, page) -> list:
     return missing
 
 
+def requirement_check(check) -> dict:
+    """Normalise a verifier reply. With a per-requirement list, done needs every requirement met and quoted.
+
+    Listing requirements one by one makes the verifier look at each value (xe.com: USD->EUR, not EUR->INR) instead of
+    approving a page that only looks similar. The quotes become the evidence that evidence_holds checks.
+    """
+    check = dict(check or {}) if isinstance(check, dict) else {}
+    reqs = [r for r in check.get("requirements") or [] if isinstance(r, dict)]
+    if reqs:
+        unmet = [str(r.get("need") or "?") for r in reqs if not r.get("met") or not str(r.get("quote") or "").strip()]
+        check["evidence"] = [str(r.get("quote")) for r in reqs if str(r.get("quote") or "").strip()]
+        if unmet:
+            check["done"] = False
+            check["missing"] = check.get("missing") or "Not shown: " + "; ".join(unmet)
+    return check
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

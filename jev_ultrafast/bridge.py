@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from .agent import Agent
-from .chat_agent import chat_turn
+from .chat_agent import chat_turn, synthesize_outcome
 from .contracts import GAVE_UP, page_key
 from .model import MissingValue
 from .questions import MAX_EARLY_CHECKS, MAX_STEPS
@@ -39,6 +39,16 @@ def normalize_profile_aliases(prof):
                 prof.setdefault(k, val)
 
 
+_last_session_ms = 0
+
+
+def new_session_id():
+    """Millisecond ids, but never the same one twice: two sessions in one millisecond used to share a history file."""
+    global _last_session_ms
+    _last_session_ms = max(int(time.time() * 1000), _last_session_ms + 1)
+    return f"sess_{_last_session_ms}"
+
+
 class AssistBridge:
     def __init__(self):
         # Re-entrant: reset() holds the lock while calling stop(), which takes it again.
@@ -53,7 +63,7 @@ class AssistBridge:
         self.user_input_response = None
         self.worker_thread = None
         self.msg_counter = 1
-        self.session_id = f"sess_{int(time.time() * 1000)}"
+        self.session_id = new_session_id()
         self.title = "New conversation"
         self.generation = 0
 
@@ -146,7 +156,7 @@ class AssistBridge:
         self.stop()
         with self.lock:
             self.generation += 1
-            self.session_id = f"sess_{int(time.time() * 1000)}"
+            self.session_id = new_session_id()
             self.title = "New conversation"
             self.messages = []
             self.profile = {}
@@ -351,8 +361,6 @@ class AssistBridge:
                                                 and page_key(page_now) not in checked_urls
                                                 and len(checked_urls) < MAX_EARLY_CHECKS
                                             ):
-                                                from .chat_agent import synthesize_outcome
-
                                                 checked_urls.add(page_key(page_now))
                                                 early = synthesize_outcome(agent.state["goal"], page_now)
                                                 if early.get("completed"):
@@ -406,8 +414,6 @@ class AssistBridge:
                                     return
                                 self.current_url = final_page.get("url")
                                 if agent.state["status"] == "done":
-                                    from .chat_agent import synthesize_outcome
-
                                     stop = agent.state.get("stop_reason") or {}
                                     if stop.get("code") == "verified_done":
                                         outcome = {"completed": True, "summary": stop.get("summary") or ""}
@@ -437,8 +443,6 @@ class AssistBridge:
                                     stop = agent.state.get("stop_reason") or {}
                                     if stop.get("code") in GAVE_UP:
                                         # Ran out of road, not refused: the goal may already be on screen.
-                                        from .chat_agent import synthesize_outcome
-
                                         final = synthesize_outcome(agent.state["goal"], final_page)
                                         if final.get("completed"):
                                             asst_msg["content"] += (
@@ -457,7 +461,17 @@ class AssistBridge:
                                             )
                                             self._save_session()
                                             agent.restart(plan["goal"], plan.get("url"))
-                                            checked_urls = set()
+                                            checked_urls = {page_key(agent.state["page"])}
+                                            # The recovery URL may already be the goal page: check before acting.
+                                            landed = synthesize_outcome(agent.state["goal"], agent.state["page"])
+                                            if landed.get("completed"):
+                                                agent.stop(
+                                                    "done",
+                                                    "verified_done",
+                                                    "The goal is visibly complete on this page.",
+                                                    evidence=landed.get("evidence"),
+                                                    summary=landed.get("summary"),
+                                                )
                                             continue
                                         if plan["action"] == "ask_user" and plan.get("question"):
                                             stop = {**stop, "message": f"{stop.get('message')} {plan['question']}"}

@@ -8,7 +8,14 @@ import json
 import os
 from pathlib import Path
 
-from .contracts import OutcomeEvaluation, SubGoal, evidence_holds, missing_goal_values, normalize_subgoals
+from .contracts import (
+    OutcomeEvaluation,
+    SubGoal,
+    evidence_holds,
+    missing_goal_values,
+    normalize_subgoals,
+    requirement_check,
+)
 from .model import json_content, post_json
 
 CHAT_SYSTEM = """You are Jev Assist, an AI browser co-pilot and conversational agent. You help users
@@ -166,7 +173,9 @@ Return JSON:
   "completed": true/false (true ONLY if the goal is visibly satisfied; false if stopped on a generic homepage,
     search listing, category/topic page, login or error page, or intermediate page; the requested item must be
     the page's main subject, not just a link, recent-searches chip or sidebar entry),
-  "evidence": ["short exact quotes copied from the page text that prove each requirement; empty if not completed"],
+  "requirements": [{"need": "each requirement of the goal: every item, value, direction and unit, and the kind of
+    page asked for (search results vs AI answers/topic/keyword page)", "met": true/false,
+    "quote": "short exact quote from the page proving it, or empty"}],
   "summary": "2-4 clean markdown bullet points of what was reached or found, what remains to be done, and immediate next action. Under 100 words. No fluff."
 }"""
 
@@ -191,7 +200,7 @@ def synthesize_outcome(goal, page):
     try:
         synth_body = {
             "model": model,
-            "max_tokens": 500,
+            "max_tokens": 800,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": SYNTHESIS_SYSTEM},
@@ -204,7 +213,8 @@ def synthesize_outcome(goal, page):
         res = post_json(base + "/chat/completions", key, synth_body)
         data = json_content(res)
         if isinstance(data, dict):
-            comp = bool(data.get("completed", False))
+            data = requirement_check({**data, "done": data.get("completed", False)})
+            comp = bool(data.get("done"))
             summ = str(data.get("summary") or fallback_summary).strip()
             evidence = data.get("evidence")
             if comp and not evidence_holds(evidence, page.get("text"), page.get("title"), page.get("url")):

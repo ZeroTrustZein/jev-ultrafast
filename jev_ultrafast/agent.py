@@ -83,6 +83,31 @@ class Agent:
             "elements": action_space(self.state["page"]["actions"])[0],
         }
 
+    def restart(self, goal, url=None):
+        """Recovery: a fresh attempt in the same tab, with a new goal and optionally a new start URL.
+
+        The stuck attempt is kept in state["attempts"] so the next recovery plan can see what already failed.
+        History and the decision budget start over, so the new route gets its full step and call budget.
+        """
+        state = self.state
+        state.setdefault("attempts", []).append(
+            {
+                "stop": (state.get("stop_reason") or {}).get("code"),
+                "message": (state.get("stop_reason") or {}).get("message"),
+                "url": (state.get("page") or {}).get("url"),
+                "steps": len(state["history"]),
+                "last_actions": [h.get("action") for h in state["history"][-8:]],
+            }
+        )
+        if url:
+            state["browser"].call("Page.navigate", url=url)
+            state["browser"].wait_ready()
+        state["page"] = state["browser"].observe(screenshot=self.screenshots)
+        state.update(goal=goal, history=[], decisions=[], decision=None, status="ready", stop_reason=None)
+        state.pop("denied", None)
+        self.pending_text = None
+        return self.snapshot()
+
     def without_dead_ends(self, page):
         """The page as the models see it, minus targets that already did nothing twice on this URL.
 

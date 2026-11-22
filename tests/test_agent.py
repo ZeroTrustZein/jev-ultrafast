@@ -1099,7 +1099,7 @@ def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
 def test_planner_never_overrules_a_refusal(monkeypatch):
     from jev_ultrafast import planner
 
-    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "model_blocked", "message": "no"}})
+    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "error", "message": "crash"}})
     fake.snapshot = Mock(return_value={"page": page()})
     fake.__enter__ = Mock(return_value=fake)
     fake.__exit__ = Mock(return_value=False)
@@ -1145,3 +1145,59 @@ def test_typed_field_values_count_as_on_the_page():
     form = {**page(), "text": "Student Registration Form First Name"}
     form["actions"] = [{**page()["actions"][0], "value": "Test"}]
     assert missing_goal_values("Fill First Name 'Test'", form) == []
+
+
+def stuck_agent(code="loop"):
+    agent = loop.Agent.__new__(loop.Agent)
+    agent.screenshots = False
+    agent.pending_text = None
+    browser = Mock(observe=Mock(return_value=page()))
+    agent.state = {"status": "blocked", "page": page(), "history": [{"action": "Go"}], "decisions": [{}],
+                   "goal": "Find a book", "browser": browser, "started_at": None, "elapsed_ms": 0,
+                   "stop_reason": {"code": code, "message": "Stuck"}}
+    agent.snapshot = lambda: dict(agent.state)
+    return agent
+
+
+def test_restart_keeps_the_failed_attempt_and_resets_budgets():
+    agent = stuck_agent()
+    agent.restart("Find a book via search URL", "https://example.test/search?q=book")
+    agent.state["browser"].call.assert_called_once_with("Page.navigate", url="https://example.test/search?q=book")
+    assert agent.state["status"] == "ready" and agent.state["history"] == [] and agent.state["decisions"] == []
+    assert agent.state["attempts"][0]["stop"] == "loop" and agent.state["attempts"][0]["last_actions"] == ["Go"]
+
+
+def test_recovery_keeps_the_original_goal_and_rejects_bad_urls():
+    from jev_ultrafast.recovery import plan_recovery
+
+    reply = {"action": "retry", "url": "javascript:alert(1)", "goal": "Type the date", "why": "picker loops"}
+    plan = plan_recovery("Pick 15 March 2027", stuck_agent(), ask=lambda *_: reply)
+    assert plan["url"] is None and plan["goal"].startswith("Pick 15 March 2027") and "Type the date" in plan["goal"]
+    assert plan_recovery("x", stuck_agent(), ask=lambda *_: "nonsense")["action"] == "give_up"
+
+
+def test_planner_retries_a_stuck_run_on_a_new_route(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    runs = iter([[("blocked", {"code": "loop", "message": "Stuck"})], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://example.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "no book"},  # verify after the loop
+        {"action": "retry", "url": "https://example.test/search?q=book", "goal": "Use search", "why": "loop"},
+        {"done": True, "evidence": ["Search"], "missing": ""},  # final verify on the new route
+    ]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None)
+    assert result["done"] is True and agent.state["attempts"][0]["stop"] == "loop"

@@ -11,6 +11,7 @@ from .chat_agent import chat_turn
 from .contracts import GAVE_UP, page_key
 from .model import MissingValue
 from .questions import MAX_EARLY_CHECKS, MAX_STEPS
+from .recovery import MAX_RECOVERIES, RECOVERABLE, plan_recovery
 
 # Side-panel attachments land here (artifacts/ is git-ignored), so the agent can read and upload them.
 UPLOADS = Path.cwd() / "artifacts" / "uploads"
@@ -314,6 +315,7 @@ class AssistBridge:
                     ) as agent:
                         self.active_agent = agent
                         done_verifications = 0
+                        recoveries = 0
                         checked_urls = set()
                         while True:
                             while agent.state["status"] not in {"done", "blocked"}:
@@ -444,6 +446,23 @@ class AssistBridge:
                                                 f"({final_page.get('url')})\n\n{final.get('summary', '')}"
                                             )
                                             break
+                                    # Step 4: stuck is not the end. Plan another route and retry in the same tab.
+                                    if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
+                                        recoveries += 1
+                                        plan = plan_recovery(goal, agent)
+                                        if plan["action"] == "retry":
+                                            asst_msg["content"] += (
+                                                f"\n\n🔁 **Got stuck ({stop.get('message')}). Trying another way:** "
+                                                f"{plan.get('why') or 'new route'}"
+                                            )
+                                            self._save_session()
+                                            agent.restart(plan["goal"], plan.get("url"))
+                                            checked_urls = set()
+                                            continue
+                                        if plan["action"] == "ask_user" and plan.get("question"):
+                                            stop = {**stop, "message": f"{stop.get('message')} {plan['question']}"}
+                                        elif plan.get("why"):
+                                            stop = {**stop, "message": f"{stop.get('message')} ({plan['why']})"}
                                     where = f"[{final_page.get('title')}]({final_page.get('url')})"
                                     msg = (
                                         f"\n\n⛔ **Stopped after {stop.get('steps', 0)} steps on {where}:** "

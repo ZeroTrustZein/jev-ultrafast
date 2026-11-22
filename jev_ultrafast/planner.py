@@ -21,6 +21,7 @@ from .contracts import GAVE_UP, evidence_holds, missing_goal_values, page_key
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
+from .recovery import MAX_RECOVERIES, RECOVERABLE, plan_recovery
 
 PLAN = """You prepare a task for a fast browser agent that can click, type, select, scroll, and attach the user's listed
 files to upload fields, but cannot read documents.
@@ -136,7 +137,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
 
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
         checked = set()
-        for _ in range(rounds):
+        verify_rounds = recoveries = 0
+        while True:
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
@@ -182,6 +184,22 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
                         return {**final, **agent.snapshot()}
+                # Step 4: stuck is not the end. Plan another route and try again in the same tab.
+                if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
+                    recoveries += 1
+                    plan = plan_recovery(goal, agent, ask=ask)
+                    report(f"RECOVER {recoveries}/{MAX_RECOVERIES} after {stop.get('code')}: {plan}")
+                    if plan["action"] == "ask_user" and plan.get("question"):
+                        answer = ask_user(f"{plan['question']} ").strip()
+                        if answer:
+                            agent.restart(f"{plan['goal']}\nUser said: {answer}", plan.get("url"))
+                            checked = set()
+                            continue
+                    elif plan["action"] == "retry":
+                        agent.restart(plan["goal"], plan.get("url"))
+                        checked = set()
+                        continue
+                    stop = {**stop, "message": f"{stop.get('message')} Recovery: {plan.get('why') or 'gave up'}"}
                 return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
             if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
@@ -189,7 +207,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             else:
                 check = verify(goal, page)
             report(f"VERIFY {check}")
-            if check.get("done"):
+            verify_rounds += 1
+            if check.get("done") or verify_rounds >= rounds:
                 break
             # Re-plan in place: same tab, same history, sharper goal.
             agent.state.update(goal=f"{goal}\nStill missing: {check.get('missing')}", status="ready")

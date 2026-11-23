@@ -150,6 +150,12 @@ def field_values(page) -> str:
         for a in page.get("actions", [])
         if a.get("kind") in {"fill", "select"} and str(a.get("value") or "").strip()
     ]
+    # Ticked boxes and chosen radios are form state too; the verifier rejected a filled form for not showing them.
+    lines += [
+        f"{a.get('label')}: checked"
+        for a in page.get("actions", [])
+        if a.get("role") in {"checkbox", "radio", "switch"} and a.get("checked") in {True, "true", "mixed"}
+    ]
     return "\n".join(dict.fromkeys(lines))
 
 

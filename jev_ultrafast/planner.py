@@ -66,7 +66,8 @@ link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you canno
 Sites show dates in their own format, often without the year ("Fri, Jan 15" for 2027-01-15): that meets a date
 requirement when day and month match. A search is done only when result items are visible, not just the query in
 the search box or the title.
-Only the values the goal asks for count. A field the goal does not mention may hold a value the site filled in
+Only the values the goal asks for count: never add requirements from the page itself (its filters, price ranges,
+sort order, ads). field_values lists typed values and ticked checkboxes or chosen radios ("Label: checked"). A field the goal does not mention may hold a value the site filled in
 itself (today's date, a default): ignore it. When the goal says not to submit, send or confirm, an unsent form is
 exactly what was asked, never a missing step."""
 

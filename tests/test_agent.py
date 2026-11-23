@@ -1461,3 +1461,40 @@ def test_observe_retries_a_daemon_timeout_but_not_forever(monkeypatch):
     monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[hiccup] * 5))
     with pytest.raises(TimeoutError):
         b.observe(screenshot=False)
+
+
+def test_field_values_include_ticked_boxes_and_radios():
+    from jev_ultrafast.contracts import field_values
+
+    form = {"actions": [
+        {"kind": "click", "role": "radio", "label": "Other", "checked": True},
+        {"kind": "click", "role": "radio", "label": "Male", "checked": False},
+        {"kind": "click", "role": "checkbox", "label": "Sports", "checked": "true"},
+        {"kind": "fill", "role": "textbox", "label": "First Name", "value": "Test"},
+    ]}
+    assert field_values(form).splitlines() == ["First Name: Test", "Other: checked", "Sports: checked"]
+
+
+def test_stale_action_is_reused_without_asking_the_models(runner, monkeypatch):
+    choose = Mock()
+    monkeypatch.setattr(loop, "choose", choose)
+    runner.state.update(status="ready", decision=None,
+                        stale_action={"kind": "click", "label": "Go", "decision": click()})
+    runner.command("predict")
+    assert runner.state["decision"]["choice"] == "e3" and "stale_action" not in runner.state
+    choose.assert_not_called()
+
+
+def test_page_that_never_settles_stops_as_loop(runner, monkeypatch):
+    monkeypatch.setenv("GEAR2", "0")
+    choose = Mock(side_effect=lambda *_: click())
+    monkeypatch.setattr(loop, "choose", choose)
+    runner.state["browser"].act = Mock(side_effect=loop.StalePage("changed"))
+    for _ in range(loop.STALE_LIMIT):
+        runner.state.update(decision=click(), status="ready")
+        runner.command("tick")
+        if runner.state["status"] == "blocked":
+            break
+    stop = runner.state["stop_reason"]
+    assert stop["code"] == "loop" and "changed before each" in stop["message"]
+    assert choose.call_count == 1  # later ticks re-used the first choice

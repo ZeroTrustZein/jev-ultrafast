@@ -1272,3 +1272,13 @@ def test_rate_limit_is_retried_then_succeeds(monkeypatch):
     monkeypatch.setattr(model.time, "sleep", sleeps.append)
     assert model.post_json("https://x.test", "k", {"messages": []})["choices"]
     assert sleeps == [1.0]
+
+
+def test_verifier_sees_and_accepts_typed_field_values(monkeypatch):
+    from jev_ultrafast import planner
+
+    form = {**page(), "text": "Student Registration Form", "actions": [{**page()["actions"][0], "value": "Test"}]}
+    ask = Mock(return_value={"done": True, "requirements": [{"need": "First name Test", "met": True, "quote": "Test"}]})
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.verify("Fill First Name 'Test'", form)["done"] is True
+    assert "Search: Test" in json.loads(ask.call_args.args[1])["field_values"]

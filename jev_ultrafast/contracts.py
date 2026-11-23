@@ -143,6 +143,16 @@ def requirement_check(check) -> dict:
     return check
 
 
+def field_values(page) -> str:
+    """Typed form values as text. Page text omits what is inside inputs, so a filled form looked empty to verifiers."""
+    lines = [
+        f"{a.get('label')}: {a.get('value')}"
+        for a in page.get("actions", [])
+        if a.get("kind") in {"fill", "select"} and str(a.get("value") or "").strip()
+    ]
+    return "\n".join(dict.fromkeys(lines))
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

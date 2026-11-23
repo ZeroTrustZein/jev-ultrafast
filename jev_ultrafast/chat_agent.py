@@ -12,6 +12,7 @@ from .contracts import (
     OutcomeEvaluation,
     SubGoal,
     evidence_holds,
+    field_values,
     missing_goal_values,
     normalize_subgoals,
     requirement_check,
@@ -196,6 +197,7 @@ def synthesize_outcome(goal, page):
         f"USER GOAL: {goal}\n"
         f"FINAL PAGE TITLE: {page.get('title', '')}\n"
         f"FINAL PAGE URL: {page.get('url', '')}\n"
+        f"FORM FIELD VALUES:\n{field_values(page) or '(none)'}\n"
         f"PAGE TEXT CONTENT:\n{page.get('text', '')[:12000]}"
     )
     try:
@@ -218,7 +220,8 @@ def synthesize_outcome(goal, page):
             comp = bool(data.get("done"))
             summ = str(data.get("summary") or fallback_summary).strip()
             evidence = data.get("evidence")
-            if comp and not evidence_holds(evidence, page.get("text"), page.get("title"), page.get("url")):
+            proof_sources = (page.get("text"), page.get("title"), page.get("url"), field_values(page))
+            if comp and not evidence_holds(evidence, *proof_sources):
                 # The model claimed success without quoting proof that is really on the page.
                 comp = False
                 summ += "\n\n(Not confirmed: no visible proof on the page.)"

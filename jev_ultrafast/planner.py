@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
-from .contracts import GAVE_UP, evidence_holds, missing_goal_values, page_key, requirement_check
+from .contracts import GAVE_UP, evidence_holds, field_values, missing_goal_values, page_key, requirement_check
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
@@ -58,10 +58,13 @@ link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you canno
 
 def verify(goal, page):
     """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
-    content = json.dumps({"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"]})
+    fields = field_values(page)
+    content = json.dumps(
+        {"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"], "field_values": fields}
+    )
     check = requirement_check(ask(VERIFY, content))
     proof = check.get("evidence")
-    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"]):
+    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"], fields):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
     absent = missing_goal_values(goal, page) if check.get("done") else []
     if absent:

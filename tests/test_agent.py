@@ -1445,3 +1445,19 @@ def test_search_page_with_only_a_header_is_not_done(monkeypatch):
     assert check["done"] is False and "not loaded" in check["missing"]
     full = {**shell, "text": shell["text"] + "\n1-48 of over 10,000 results for usb-c cable\n" + "Cable 2m " * 60}
     assert planner.verify("Search the shop for 'usb-c cable'", full)["done"] is True
+
+
+def test_observe_retries_a_daemon_timeout_but_not_forever(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.session, b.allow_upload = "s", False
+    b.evaluate = Mock(return_value=False)
+    b.settle = Mock()
+    monkeypatch.setattr(browser.time, "sleep", lambda _: None)
+    hiccup = TimeoutError("Runtime.evaluate timed out after 5s")
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[hiccup, page()]))
+    assert b.observe(screenshot=False)["text"] == "Search"
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[hiccup] * 5))
+    with pytest.raises(TimeoutError):
+        b.observe(screenshot=False)

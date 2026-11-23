@@ -244,6 +244,7 @@ class Browser:
         except Exception:
             pass
         page = None
+        timeouts = 0
         empty_deadline = time.monotonic() + EMPTY_PAGE_WAIT
         for attempt in range(25):
             try:
@@ -259,6 +260,14 @@ class Browser:
                 if attempt == 24:
                     raise
                 time.sleep(0.1)
+                continue
+            except TimeoutError:
+                # The harness daemon sometimes misses one reply ("Runtime.evaluate timed out after 5s"). Observing
+                # is read-only, so asking again is safe; a browser that keeps timing out still raises.
+                timeouts += 1
+                if timeouts > OBSERVE_TIMEOUT_RETRIES:
+                    raise
+                time.sleep(1)
                 continue
             # An empty observation is a page still rendering, not a page with no way forward.
             if is_empty(page) and time.monotonic() < empty_deadline:
@@ -308,6 +317,7 @@ class Browser:
 
 
 EMPTY_PAGE_WAIT = 6.0
+OBSERVE_TIMEOUT_RETRIES = 2
 
 READY_STATE = """(() => ({
   href: location.href,

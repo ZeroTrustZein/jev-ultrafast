@@ -65,7 +65,10 @@ the opened result) must be visible as the main subject of the page (its heading 
 link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false.
 Sites show dates in their own format, often without the year ("Fri, Jan 15" for 2027-01-15): that meets a date
 requirement when day and month match. A search is done only when result items are visible, not just the query in
-the search box or the title."""
+the search box or the title.
+Only the values the goal asks for count. A field the goal does not mention may hold a value the site filled in
+itself (today's date, a default): ignore it. When the goal says not to submit, send or confirm, an unsent form is
+exactly what was asked, never a missing step."""
 
 
 def verify(goal, page):

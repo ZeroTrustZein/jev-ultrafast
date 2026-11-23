@@ -297,10 +297,8 @@ class Agent:
                 state["decision"] = None
             stale = state.pop("stale_action", None)
             if state["decision"] is None and stale:
-                again = next(
-                    (a for a in state["page"]["actions"] if a["kind"] == stale["kind"] and a["label"] == stale["label"]),
-                    None,
-                )
+                same = (stale["kind"], stale["label"])
+                again = next((a for a in state["page"]["actions"] if (a["kind"], a["label"]) == same), None)
                 if again:
                     state["decision"] = {
                         **stale["decision"],

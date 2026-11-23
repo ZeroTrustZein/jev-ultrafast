@@ -1353,7 +1353,7 @@ def test_toggled_filter_is_hidden_after_three_clicks(runner):
     url = page()["url"]
     chip = {"id": "e9", "kind": "click", "label": "Nonstop only", "role": "button", "node": 30}
     runner.state["history"] = [
-        {"action": "Nonstop only", "kind": "click", "page_changed": True, "url": url} for _ in range(3)
+        {"action": "Nonstop only", "kind": "click", "page_changed": True, "url": f"{url}?tfs={i}"} for i in range(3)
     ]
     seen = runner.without_dead_ends({**page(), "actions": page()["actions"] + [chip]})
     assert "Nonstop only" in seen["dead_ends"]

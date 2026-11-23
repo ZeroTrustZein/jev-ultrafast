@@ -26,6 +26,11 @@ BOT_WALL_PAUSE = 2.0
 REPEATABLE = re.compile(r"\b(more|next|previous|prev|load|increase|decrease|add|plus|minus)\b|^[+\-]$", re.I)
 
 
+def _route(url):
+    parts = urlparse(url or "")
+    return parts.netloc, parts.path.rstrip("/")
+
+
 def sensitive(label):
     label = label or ""
     if IRREVERSIBLE.search(label):
@@ -140,9 +145,11 @@ class Agent:
         dead = {label for label, n in counts.items() if n >= 2}
         # Toggles: a filter chip or tab flips the page each time, so it never looks like a no-op, yet the third click
         # of the same control on the same URL is undoing earlier work (Google Flights filters, again and again).
+        # Compared by host and path: filters often rewrite the query string (?tfs=..., ?sort=...).
+        here = _route(page["url"])
         toggles = {}
         for h in self.state["history"][-12:]:
-            if h.get("kind") in {"click", "select"} and h.get("url") == page["url"]:
+            if h.get("kind") in {"click", "select"} and _route(h.get("url")) == here:
                 toggles[h["action"]] = toggles.get(h["action"], 0) + 1
         dead |= {label for label, n in toggles.items() if n >= 3 and not REPEATABLE.search(label or "")}
         # Ping-pong: clicks that change the page but only bounce between two URLs (demoqa: logo -> home, Forms ->

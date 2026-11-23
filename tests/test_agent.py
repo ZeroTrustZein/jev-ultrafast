@@ -1282,3 +1282,35 @@ def test_verifier_sees_and_accepts_typed_field_values(monkeypatch):
     monkeypatch.setattr(planner, "ask", ask)
     assert planner.verify("Fill First Name 'Test'", form)["done"] is True
     assert "Search: Test" in json.loads(ask.call_args.args[1])["field_values"]
+
+
+def test_home_page_card_is_not_the_forecast_page(monkeypatch):
+    from jev_ultrafast import planner
+
+    goal = "Find the current weather forecast for 'London, England' on weather.com"
+    home = {**page(), "url": "https://weather.com/?Goto=Redirected", "title": "National and Local Weather Radar",
+            "text": "London Weather London, England, United Kingdom Now 40°",
+            "actions": [{"id": "e1", "kind": "fill", "label": "Search City or Zip Code", "role": "combobox",
+                         "value": "London", "node": 1}]}
+    reply = {"done": True, "requirements": [{"need": "London forecast", "met": True, "quote": "London, England"}]}
+    monkeypatch.setattr(planner, "ask", Mock(return_value=reply))
+    assert planner.verify(goal, home)["done"] is False
+    forecast = {**home, "url": "https://weather.com/weather/tenday/l/gb/england/greater-london/city/london",
+                "title": "London Daily Forecast"}
+    assert planner.verify(goal, forecast)["done"] is True
+
+
+def test_vision_prompt_lists_goal_named_elements(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "k")
+    monkeypatch.setenv("GEAR2_MODEL", "vision-combo")
+    sent = {}
+
+    def fake(url, key, body):
+        sent.update(body)
+        return {"choices": [{"message": {"content": '{"operation": "TYPE_TEXT", "target": "1", "text": "x"}'}}]}
+
+    monkeypatch.setattr(model, "post_json", fake)
+    model.choose_vision(page(), "Type into the 'Search' box", [], "c2hvdA==")
+    text = sent["messages"][1]["content"][0]["text"]
+    assert sent["model"] == "vision-combo"
+    assert 'GOAL-NAMED ELEMENTS' in text and '"Search"' in text.split("ELEMENT TABLE")[0]

@@ -581,10 +581,11 @@ def test_gear2_jev_absent_target_blocks(monkeypatch):
 def test_gear2_backend_switch(monkeypatch, backend):
     monkeypatch.setenv("GEAR2_BACKEND", backend)
     monkeypatch.delenv("GEAR2_LAYA_URL", raising=False)
-    jev, vlm = Mock(return_value="jev"), Mock(return_value="vlm")
+    monkeypatch.delenv("GEAR2_MODEL", raising=False)
+    jev, vlm = Mock(return_value={"model": "jev", "confidence": 0.1}), Mock(return_value={"model": "vlm"})
     monkeypatch.setattr(loop, "choose_vision_jev", jev)
     monkeypatch.setattr(loop, "choose_vision", vlm)
-    assert loop.gear2(page(), "g", [], "s", "r") == ("vlm" if backend == "vlm" else "jev")
+    assert loop.gear2(page(), "g", [], "s", "r")["model"] == ("vlm" if backend == "vlm" else "jev")
     if backend != "vlm":
         assert jev.call_args.kwargs["base"] == ("http://127.0.0.1:8791" if backend == "laya" else None)
 
@@ -1314,3 +1315,54 @@ def test_vision_prompt_lists_goal_named_elements(monkeypatch):
     text = sent["messages"][1]["content"][0]["text"]
     assert sent["model"] == "vision-combo"
     assert 'GOAL-NAMED ELEMENTS' in text and '"Search"' in text.split("ELEMENT TABLE")[0]
+
+
+def test_unsure_small_vision_model_escalates_to_vision_llm(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    jev = Mock(return_value={"model": "laya", "choice": "a1", "confidence": 0.2})
+    vlm = Mock(return_value={"model": "vision:combo/vision", "choice": "a2", "gear": 2})
+    monkeypatch.setattr(loop, "choose_vision_jev", jev)
+    monkeypatch.setattr(loop, "choose_vision", vlm)
+    d = loop.gear2(page(), "g", [], "s", "low confidence")
+    assert d["choice"] == "a2" and d["escalated_from"] == "laya"
+
+
+def test_sure_small_vision_model_is_kept(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    jev = Mock(return_value={"model": "laya", "choice": "a1", "confidence": 0.9})
+    vlm = Mock()
+    monkeypatch.setattr(loop, "choose_vision_jev", jev)
+    monkeypatch.setattr(loop, "choose_vision", vlm)
+    assert loop.gear2(page(), "g", [], "s", "low confidence")["choice"] == "a1"
+    vlm.assert_not_called()
+
+
+def test_failed_escalation_keeps_small_model_decision(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    unsure = {"model": "laya", "choice": "a1", "confidence": 0.2}
+    monkeypatch.setattr(loop, "choose_vision_jev", Mock(return_value=unsure))
+    monkeypatch.setattr(loop, "choose_vision", Mock(side_effect=RuntimeError("no images")))
+    d = loop.gear2(page(), "g", [], "s", "low confidence")
+    assert d["choice"] == "a1" and "no images" in d["gear2_error"]
+
+
+def test_toggled_filter_is_hidden_after_three_clicks(runner):
+    url = page()["url"]
+    chip = {"id": "e9", "kind": "click", "label": "Nonstop only", "role": "button", "node": 30}
+    runner.state["history"] = [
+        {"action": "Nonstop only", "kind": "click", "page_changed": True, "url": url} for _ in range(3)
+    ]
+    seen = runner.without_dead_ends({**page(), "actions": page()["actions"] + [chip]})
+    assert "Nonstop only" in seen["dead_ends"]
+    runner.state["history"] = runner.state["history"][:2]
+    assert "dead_ends" not in runner.without_dead_ends({**page(), "actions": page()["actions"] + [chip]})
+
+
+def test_load_more_may_be_clicked_repeatedly(runner):
+    url = page()["url"]
+    more = {"id": "e9", "kind": "click", "label": "Load more results", "role": "button", "node": 30}
+    runner.state["history"] = [{"action": "Load more results", "kind": "click", "page_changed": True, "url": url}] * 4
+    assert "dead_ends" not in runner.without_dead_ends({**page(), "actions": page()["actions"] + [more]})

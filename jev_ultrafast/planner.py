@@ -19,6 +19,7 @@ from pathlib import Path
 from .agent import Agent
 from .contracts import (
     GAVE_UP,
+    content_missing,
     evidence_holds,
     field_values,
     missing_goal_values,
@@ -61,7 +62,10 @@ an opened item vs a list). A value with the wrong unit, direction or page kind i
 Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
 an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
 the opened result) must be visible as the main subject of the page (its heading or main content), not only in a
-link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false."""
+link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false.
+Sites show dates in their own format, often without the year ("Fri, Jan 15" for 2027-01-15): that meets a date
+requirement when day and month match. A search is done only when result items are visible, not just the query in
+the search box or the title."""
 
 
 def verify(goal, page):
@@ -75,7 +79,9 @@ def verify(goal, page):
     if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"], fields):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
     absent = missing_goal_values(goal, page) if check.get("done") else []
-    if absent:
+    if check.get("done") and content_missing(page):
+        check = {**check, "done": False, "missing": "The page's main content has not loaded yet (only a header)."}
+    elif absent:
         check = {**check, "done": False, "missing": f"Not shown on the page: {', '.join(absent)}"}
     elif check.get("done") and subject_missing(goal, page):
         check = {**check, "done": False, "missing": "The page's title/URL is not about the goal's subject."}

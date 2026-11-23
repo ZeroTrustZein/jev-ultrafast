@@ -17,7 +17,15 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
-from .contracts import GAVE_UP, evidence_holds, field_values, missing_goal_values, page_key, requirement_check
+from .contracts import (
+    GAVE_UP,
+    evidence_holds,
+    field_values,
+    missing_goal_values,
+    page_key,
+    requirement_check,
+    subject_missing,
+)
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
@@ -69,6 +77,8 @@ def verify(goal, page):
     absent = missing_goal_values(goal, page) if check.get("done") else []
     if absent:
         check = {**check, "done": False, "missing": f"Not shown on the page: {', '.join(absent)}"}
+    elif check.get("done") and subject_missing(goal, page):
+        check = {**check, "done": False, "missing": "The page's title/URL is not about the goal's subject."}
     return check
 
 
@@ -207,6 +217,15 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
                         return {**final, **agent.snapshot()}
+                # A human check is the person's to solve. Ask once per allowance, then look again in the same tab.
+                if stop.get("code") == "bot_check" and recoveries < MAX_RECOVERIES:
+                    recoveries += 1
+                    answer = ask_user(f"{stop.get('message')} Press Enter when done, or type 'skip'. ").strip()
+                    if answer.lower() not in {"skip", "n", "no", "stop"}:
+                        agent.restart(goal)
+                        checked.clear()
+                        arrival_check()
+                        continue
                 # Step 4: stuck is not the end. Plan another route and try again in the same tab.
                 if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
                     recoveries += 1

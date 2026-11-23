@@ -16,6 +16,7 @@ from .contracts import (
     missing_goal_values,
     normalize_subgoals,
     requirement_check,
+    subject_missing,
 )
 from .model import json_content, post_json
 
@@ -229,6 +230,9 @@ def synthesize_outcome(goal, page):
             if absent:
                 comp = False
                 summ += f"\n\n(Not confirmed: the page doesn't show {', '.join(absent)}.)"
+            elif comp and subject_missing(goal, page):
+                comp = False
+                summ += "\n\n(Not confirmed: this page's title and address aren't about what you asked for.)"
             return {"completed": comp, "summary": summ, "evidence": evidence if comp else None}
         return {"completed": False, "summary": str(data).strip()}
     except Exception as exc:

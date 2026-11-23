@@ -420,6 +420,8 @@ RULES:
 - Submit populated search fields: if a search box has a value and Search/Submit is visible, CLICK it.
 - Set all requested filters/controls (combobox, checkbox) before opening a result item or choosing DONE.
 - Date pickers: if the date input accepts text, TYPE_TEXT the full date instead of clicking month arrows.
+- Never click a link or tab that leads to the page you are already on (same title or URL); it does nothing.
+- Prefer GOAL-NAMED ELEMENTS when the goal asks to use that control.
 - DONE only when the page visibly shows every place, value and item named in the goal (both ends of a route, the
   converted amount, the opened result itself rather than a results list). Otherwise act."""
 
@@ -429,7 +431,8 @@ def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
     if not key:
         raise ValueError("Gear 2 vision model requires TEXT_MODEL_API_KEY")
     base = os.environ.get("TEXT_MODEL_BASE_URL", "http://127.0.0.1:20128").rstrip("/")
-    model = os.environ.get("TEXT_MODEL", "claude-odysseus")
+    # Gear 2 needs a model that reads screenshots; the text model may not. GEAR2_MODEL picks one without touching it.
+    model = os.environ.get("GEAR2_MODEL") or os.environ.get("TEXT_MODEL", "claude-odysseus")
 
     elements, targets, controls = action_space(page["actions"])
     lines = []
@@ -441,6 +444,10 @@ def choose_vision(page, goal, history, screenshot_b64, reason="low confidence"):
         for opt in e.get("options", []):
             lines.append(f'  [{opt["index"]}] option "{opt["label"]}"')
     elements_text = "\n".join(lines)
+    from .contracts import goal_named_elements
+
+    named = goal_named_elements(goal, elements)
+    named_text = "\n".join(f'[{e["index"]}] "{e["label"]}" ops={",".join(e.get("operations", []))}' for e in named)
 
     user_text = f"""GOAL: {goal}
 TRIGGER: {reason}
@@ -448,6 +455,8 @@ VIEWPORT: width={page.get("w", 1200)}, height={page.get("h", 800)} (ensure CLICK
 RECENT ACTIONS: {json.dumps([{k: h.get(k) for k in ("action", "text", "page_changed")} for h in history[-5:]])}
 PAGE URL: {page.get("url", "")}
 PAGE TITLE: {page.get("title", "")}
+GOAL-NAMED ELEMENTS (labels matching a value quoted in the goal; usually the right target):
+{named_text or "(none)"}
 ELEMENT TABLE:
 {elements_text}
 """

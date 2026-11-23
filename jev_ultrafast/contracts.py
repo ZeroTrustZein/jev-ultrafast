@@ -153,6 +153,42 @@ def field_values(page) -> str:
     return "\n".join(dict.fromkeys(lines))
 
 
+def _value_present(value, hay, share=0.5) -> bool:
+    words = [w for w in _plain(value).split() if len(w) >= 3 and w not in _STOP] or _plain(value).split()
+    compact = hay.replace(" ", "")
+    found = sum(1 for w in words if w in hay or w in compact)
+    return bool(words) and found >= max(1, share * len(words))
+
+
+def goal_named_elements(goal, elements) -> list:
+    """Observed elements whose label matches a value quoted in the goal ('Select Date' -> the date field)."""
+    values = goal_values(goal)
+    return [e for e in elements if any(_value_present(v, _plain(e.get("label"))) for v in values)][:8]
+
+
+def subject_missing(goal, page) -> bool:
+    """True when the goal quotes values but none of them is the page's subject (title, URL, form fields).
+
+    The weather.com home page showed a London card in its body and was accepted as the London forecast page.
+    The pages that really are the goal carry it in the title or URL (search results ?q=, 'London Daily Forecast',
+    'The Matrix (1999) - IMDb') or in the form the goal asked to fill.
+    """
+    values = goal_values(goal)
+    if not values:
+        return False
+    # Form fields count (the goal may be "fill this form"), but a search box does not: typing "London" into it
+    # does not make the page about London.
+    fields = " ".join(
+        f"{a.get('label')} {a.get('value') or ''}"
+        for a in page.get("actions", [])
+        if a.get("kind") in {"fill", "select"}
+        and "search" not in f"{a.get('label')} {a.get('role')}".lower()
+    )
+    hay = _plain(" ".join(str(page.get(k) or "") for k in ("title", "url")).replace("+", " ") + " " + fields)
+    # Loose on purpose: one distinctive word of any quoted value in the title, URL or fields is enough.
+    return not any(_value_present(v, hay, share=0) for v in values)
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

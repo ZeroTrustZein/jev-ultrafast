@@ -103,6 +103,7 @@ def main():
     p.add_argument("--only", help="comma-separated task ids")
     p.add_argument("--timeout", type=int, default=300, help="wall-clock seconds per task")
     p.add_argument("--mode", choices=["agent", "planner"], default="agent", help="driving loop to benchmark")
+    p.add_argument("--max-429", type=int, default=3, help="abort the run after this many HTTP 429 crashes")
     p.add_argument("--child", help=argparse.SUPPRESS)
     a = p.parse_args()
     tasks = json.loads(SITES.read_text(encoding="utf-8"))["tasks"]
@@ -143,6 +144,11 @@ def main():
         r.setdefault("elapsed_s", round(time.perf_counter() - t0, 1))
         r["area"], r["start_url"] = t.get("area"), t["start_url"]
         results.append(r)
+        if sum("HTTP 429" in str(x.get("message")) for x in results) > a.max_429:
+            print(f"ABORT: more than {a.max_429} tasks crashed on HTTP 429", flush=True)
+            with open(out_dir / "results.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(r) + chr(10))
+            break
         with open(out_dir / "results.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(r) + "\n")
         print(f"    {'PASS' if r.get('pass') else 'FAIL'} {r.get('code')} steps={r.get('steps')} "

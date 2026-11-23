@@ -6,8 +6,9 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-from .browser import Browser, StalePage, is_empty
+from .browser import Browser, StalePage, bot_wall, is_empty
 from .model import MissingValue, action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
@@ -17,6 +18,17 @@ SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign
 IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|checkout)\b", re.I)
 # Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
 HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
+
+# Waits on a human-verification page before asking the person (Cloudflare usually clears within ~5 s).
+BOT_WALL_WAITS = 3
+BOT_WALL_PAUSE = 2.0
+# Controls that are meant to be pressed again and again on one URL ("Load more", "Next", "+").
+REPEATABLE = re.compile(r"\b(more|next|previous|prev|load|increase|decrease|add|plus|minus)\b|^[+\-]$", re.I)
+
+
+def _route(url):
+    parts = urlparse(url or "")
+    return parts.netloc, parts.path.rstrip("/")
 
 
 def sensitive(label):
@@ -32,7 +44,19 @@ def gear2(page, goal, history, screenshot, reason):
     if backend == "vlm":
         return choose_vision(page, goal, history, screenshot, reason=reason)
     base = os.environ.get("GEAR2_LAYA_URL", "http://127.0.0.1:8791") if backend == "laya" else None
-    return choose_vision_jev(page, goal, history, screenshot, reason=reason, base=base)
+    decision = choose_vision_jev(page, goal, history, screenshot, reason=reason, base=base)
+    # Benchmarks: when both gears are the same small model, an unsure gear 1 is followed by an equally unsure gear 2,
+    # which then acts almost at random (YouTube never opened a video). With a vision LLM configured (GEAR2_MODEL),
+    # hand the unsure or stuck cases to it instead.
+    threshold = float(os.environ.get("GEAR2_CONFIDENCE_THRESHOLD", "0.65"))
+    unsure = decision.get("confidence", 1.0) < threshold or decision.get("choice") in {"BLOCKED", "DONE"}
+    if os.environ.get("GEAR2_MODEL") and (unsure or reason.startswith("looping")):
+        try:
+            better = choose_vision(page, goal, history, screenshot, reason=f"{reason}; small vision model unsure")
+            return {**better, "escalated_from": decision.get("model")}
+        except Exception as exc:
+            decision["gear2_error"] = f"vision LLM failed: {type(exc).__name__}: {exc}"
+    return decision
 
 
 class Agent:
@@ -119,6 +143,15 @@ class Agent:
             if h.get("page_changed") is False and h.get("kind") not in {"wait", "fill"} and h.get("url") == page["url"]:
                 counts[h["action"]] = counts.get(h["action"], 0) + 1
         dead = {label for label, n in counts.items() if n >= 2}
+        # Toggles: a filter chip or tab flips the page each time, so it never looks like a no-op, yet the third click
+        # of the same control on the same URL is undoing earlier work (Google Flights filters, again and again).
+        # Compared by host and path: filters often rewrite the query string (?tfs=..., ?sort=...).
+        here = _route(page["url"])
+        toggles = {}
+        for h in self.state["history"][-12:]:
+            if h.get("kind") in {"click", "select"} and _route(h.get("url")) == here:
+                toggles[h["action"]] = toggles.get(h["action"], 0) + 1
+        dead |= {label for label, n in toggles.items() if n >= 3 and not REPEATABLE.search(label or "")}
         # Ping-pong: clicks that change the page but only bounce between two URLs (demoqa: logo -> home, Forms ->
         # forms, again and again). Those pages change, so the no-change rule above never sees it.
         recent = self.state["history"][-6:]
@@ -201,7 +234,36 @@ class Agent:
                     state["page"]["screenshot"] = shot.get("data")
                 except Exception:
                     pass
-            if is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
+            wall = bot_wall(state["page"])
+            if wall:
+                waited = 0
+                for h in reversed(state["history"]):
+                    if not h.get("wall"):
+                        break
+                    waited += 1
+                if waited >= BOT_WALL_WAITS or not any(a["id"] == "wait" for a in state["page"]["actions"]):
+                    host = urlparse(state["page"].get("url") or "").netloc or "This site"
+                    return self.stop(
+                        "blocked",
+                        "bot_check",
+                        f"{host} is showing a human-verification check (\"{wall}\"). I don't solve those. "
+                        "Please complete it in the browser, then tell me to continue.",
+                    )
+                # Some checks clear on their own after a few seconds. Wait, and never touch the check itself.
+                state["decision"] = {
+                    "choice": "wait",
+                    "operation": "WAIT",
+                    "target": None,
+                    "confidence": 1.0,
+                    "probabilities": {"wait": 1.0},
+                    "latency_ms": 0,
+                    "usage": {},
+                    "gear": 0,
+                    "wall": wall,
+                    "reason": "human-verification page; waiting to see if it clears",
+                }
+                gear2_on = False
+            elif is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
                 # Nothing rendered yet. Asking the models here only produced BLOCKED; wait instead.
                 state["decision"] = {
                     "choice": "wait",
@@ -350,6 +412,8 @@ class Agent:
                     return self.stop(
                         "blocked", "denied", f"You did not approve the sensitive click '{action['label']}'."
                     )
+            if decision.get("wall"):
+                time.sleep(BOT_WALL_PAUSE)
             # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
@@ -375,6 +439,7 @@ class Agent:
                     "page_changed": None,
                     "url": page["url"],
                     "usage": decision["usage"],
+                    "wall": decision.get("wall"),
                     "executed_ms": round((time.perf_counter() - state["started_at"]) * 1000),
                     "elapsed_ms": state["elapsed_ms"],
                 }

@@ -581,10 +581,11 @@ def test_gear2_jev_absent_target_blocks(monkeypatch):
 def test_gear2_backend_switch(monkeypatch, backend):
     monkeypatch.setenv("GEAR2_BACKEND", backend)
     monkeypatch.delenv("GEAR2_LAYA_URL", raising=False)
-    jev, vlm = Mock(return_value="jev"), Mock(return_value="vlm")
+    monkeypatch.delenv("GEAR2_MODEL", raising=False)
+    jev, vlm = Mock(return_value={"model": "jev", "confidence": 0.1}), Mock(return_value={"model": "vlm"})
     monkeypatch.setattr(loop, "choose_vision_jev", jev)
     monkeypatch.setattr(loop, "choose_vision", vlm)
-    assert loop.gear2(page(), "g", [], "s", "r") == ("vlm" if backend == "vlm" else "jev")
+    assert loop.gear2(page(), "g", [], "s", "r")["model"] == ("vlm" if backend == "vlm" else "jev")
     if backend != "vlm":
         assert jev.call_args.kwargs["base"] == ("http://127.0.0.1:8791" if backend == "laya" else None)
 
@@ -1282,3 +1283,149 @@ def test_verifier_sees_and_accepts_typed_field_values(monkeypatch):
     monkeypatch.setattr(planner, "ask", ask)
     assert planner.verify("Fill First Name 'Test'", form)["done"] is True
     assert "Search: Test" in json.loads(ask.call_args.args[1])["field_values"]
+
+
+def test_home_page_card_is_not_the_forecast_page(monkeypatch):
+    from jev_ultrafast import planner
+
+    goal = "Find the current weather forecast for 'London, England' on weather.com"
+    home = {**page(), "url": "https://weather.com/?Goto=Redirected", "title": "National and Local Weather Radar",
+            "text": "London Weather London, England, United Kingdom Now 40°",
+            "actions": [{"id": "e1", "kind": "fill", "label": "Search City or Zip Code", "role": "combobox",
+                         "value": "London", "node": 1}]}
+    reply = {"done": True, "requirements": [{"need": "London forecast", "met": True, "quote": "London, England"}]}
+    monkeypatch.setattr(planner, "ask", Mock(return_value=reply))
+    assert planner.verify(goal, home)["done"] is False
+    forecast = {**home, "url": "https://weather.com/weather/tenday/l/gb/england/greater-london/city/london",
+                "title": "London Daily Forecast"}
+    assert planner.verify(goal, forecast)["done"] is True
+
+
+def test_vision_prompt_lists_goal_named_elements(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "k")
+    monkeypatch.setenv("GEAR2_MODEL", "vision-combo")
+    sent = {}
+
+    def fake(url, key, body):
+        sent.update(body)
+        return {"choices": [{"message": {"content": '{"operation": "TYPE_TEXT", "target": "1", "text": "x"}'}}]}
+
+    monkeypatch.setattr(model, "post_json", fake)
+    model.choose_vision(page(), "Type into the 'Search' box", [], "c2hvdA==")
+    text = sent["messages"][1]["content"][0]["text"]
+    assert sent["model"] == "vision-combo"
+    assert 'GOAL-NAMED ELEMENTS' in text and '"Search"' in text.split("ELEMENT TABLE")[0]
+
+
+def test_unsure_small_vision_model_escalates_to_vision_llm(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    jev = Mock(return_value={"model": "laya", "choice": "a1", "confidence": 0.2})
+    vlm = Mock(return_value={"model": "vision:combo/vision", "choice": "a2", "gear": 2})
+    monkeypatch.setattr(loop, "choose_vision_jev", jev)
+    monkeypatch.setattr(loop, "choose_vision", vlm)
+    d = loop.gear2(page(), "g", [], "s", "low confidence")
+    assert d["choice"] == "a2" and d["escalated_from"] == "laya"
+
+
+def test_sure_small_vision_model_is_kept(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    jev = Mock(return_value={"model": "laya", "choice": "a1", "confidence": 0.9})
+    vlm = Mock()
+    monkeypatch.setattr(loop, "choose_vision_jev", jev)
+    monkeypatch.setattr(loop, "choose_vision", vlm)
+    assert loop.gear2(page(), "g", [], "s", "low confidence")["choice"] == "a1"
+    vlm.assert_not_called()
+
+
+def test_failed_escalation_keeps_small_model_decision(monkeypatch):
+    monkeypatch.setenv("GEAR2_BACKEND", "laya")
+    monkeypatch.setenv("GEAR2_MODEL", "combo/vision")
+    unsure = {"model": "laya", "choice": "a1", "confidence": 0.2}
+    monkeypatch.setattr(loop, "choose_vision_jev", Mock(return_value=unsure))
+    monkeypatch.setattr(loop, "choose_vision", Mock(side_effect=RuntimeError("no images")))
+    d = loop.gear2(page(), "g", [], "s", "low confidence")
+    assert d["choice"] == "a1" and "no images" in d["gear2_error"]
+
+
+def test_toggled_filter_is_hidden_after_three_clicks(runner):
+    url = page()["url"]
+    chip = {"id": "e9", "kind": "click", "label": "Nonstop only", "role": "button", "node": 30}
+    runner.state["history"] = [
+        {"action": "Nonstop only", "kind": "click", "page_changed": True, "url": f"{url}?tfs={i}"} for i in range(3)
+    ]
+    seen = runner.without_dead_ends({**page(), "actions": page()["actions"] + [chip]})
+    assert "Nonstop only" in seen["dead_ends"]
+    runner.state["history"] = runner.state["history"][:2]
+    assert "dead_ends" not in runner.without_dead_ends({**page(), "actions": page()["actions"] + [chip]})
+
+
+def test_load_more_may_be_clicked_repeatedly(runner):
+    url = page()["url"]
+    more = {"id": "e9", "kind": "click", "label": "Load more results", "role": "button", "node": 30}
+    runner.state["history"] = [{"action": "Load more results", "kind": "click", "page_changed": True, "url": url}] * 4
+    assert "dead_ends" not in runner.without_dead_ends({**page(), "actions": page()["actions"] + [more]})
+
+
+def wall_page():
+    return {**page(), "url": "https://shop.test/errors/validateCaptcha", "title": "Robot Check",
+            "text": "Enter the characters you see below. Sorry, we just need to make sure you're not a robot."}
+
+
+def test_bot_wall_detection_ignores_long_articles():
+    from jev_ultrafast.browser import bot_wall
+
+    assert bot_wall(wall_page())
+    assert bot_wall({"title": "Just a moment...", "text": ""}) == "Just a moment..."
+    assert bot_wall({"title": "CAPTCHA - Wikipedia", "text": "A CAPTCHA is a test. " * 200}) is None
+    assert bot_wall(page()) is None
+
+
+def test_bot_wall_waits_then_asks_the_person(runner, monkeypatch):
+    monkeypatch.setattr(loop, "BOT_WALL_PAUSE", 0)
+    choose = Mock()
+    monkeypatch.setattr(loop, "choose", choose)
+    wall = wall_page()
+    runner.state.update(page=wall, status="ready", decision=None)
+    runner.state["browser"].observe.return_value = wall
+    for _ in range(loop.BOT_WALL_WAITS):
+        runner.command("predict")
+        assert runner.state["decision"]["choice"] == "wait" and runner.state["decision"]["gear"] == 0
+        runner.command("act", {"fingerprint": wall["fingerprint"]})
+    runner.command("predict")
+    stop = runner.state["stop_reason"]
+    assert stop["code"] == "bot_check" and "shop.test" in stop["message"] and "continue" in stop["message"]
+    choose.assert_not_called()
+
+
+@pytest.mark.parametrize("answer, restarted", [("", True), ("skip", False)])
+def test_planner_asks_the_person_to_clear_a_bot_check(monkeypatch, answer, restarted):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    wall = {"code": "bot_check", "message": "shop.test is showing a human-verification check."}
+    runs = iter([[("blocked", wall)], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://shop.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check after the person cleared it
+        {"done": True, "evidence": ["Search"], "missing": ""},
+    ]
+    ask = Mock(side_effect=replies)
+    monkeypatch.setattr(planner, "ask", ask)
+    asked = Mock(return_value=answer)
+    result = planner.run("Find a book", report=lambda _: None, ask_user=asked)
+    assert "human-verification" in asked.call_args.args[0]
+    assert result["done"] is restarted and ask.call_count == (4 if restarted else 2)

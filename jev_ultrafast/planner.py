@@ -17,10 +17,11 @@ import urllib.request
 from pathlib import Path
 
 from .agent import Agent
-from .contracts import GAVE_UP, evidence_holds, missing_goal_values, page_key
+from .contracts import GAVE_UP, evidence_holds, field_values, missing_goal_values, page_key, requirement_check
 from .demo import load_environment
 from .model import MissingValue, json_content, post_json
 from .questions import MAX_EARLY_CHECKS
+from .recovery import MAX_RECOVERIES, RECOVERABLE, plan_recovery
 
 PLAN = """You prepare a task for a fast browser agent that can click, type, select, scroll, and attach the user's listed
 files to upload fields, but cannot read documents.
@@ -42,8 +43,13 @@ Return JSON:
   Copy values exactly. Never invent personal information; omit facts you do not have."""
 
 VERIFY = """You check whether a browser agent finished its goal. Given the goal and the current page, return JSON:
-{"done": true/false, "evidence": ["short exact quotes copied from the page text that prove each requirement"],
- "missing": "what is still not satisfied, or empty"}.
+{"requirements": [{"need": "one requirement from the goal", "met": true/false,
+                   "quote": "short exact quote from the page that proves it, or empty"}],
+ "done": true/false, "missing": "what is still not satisfied, or empty"}.
+List EVERY requirement separately: each item, value, direction and unit (from AND to currencies, route start AND
+end, dates, counts) and the kind of page asked for (search results vs an AI-answers, topic, keyword or home page;
+an opened item vs a list). A value with the wrong unit, direction or page kind is not met. Do not list prohibitions
+("do not sign in", "read-only") as requirements; only things that should be visible.
 Judge only visible evidence. A homepage, a category or topic listing, a search form, a login page, an error page or
 an unchanged input form is not completion. Every requirement in the goal (the specific item, the computed value,
 the opened result) must be visible as the main subject of the page (its heading or main content), not only in a
@@ -52,10 +58,13 @@ link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you canno
 
 def verify(goal, page):
     """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
-    content = json.dumps({"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"]})
-    check = ask(VERIFY, content)
+    fields = field_values(page)
+    content = json.dumps(
+        {"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"], "field_values": fields}
+    )
+    check = requirement_check(ask(VERIFY, content))
     proof = check.get("evidence")
-    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"]):
+    if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"], fields):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
     absent = missing_goal_values(goal, page) if check.get("done") else []
     if absent:
@@ -126,6 +135,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
     if files:
         context_lines.append(f"Files the agent can attach to upload fields: {[Path(f).name for f in files]}")
     note = ("\n" + "\n".join(context_lines)) if context_lines else ""
+    # The planner once wrote 2024-01-15 for "2027-01-15"-style relative or partial dates; give it today's date.
+    note += f"\nToday's date: {time.strftime('%Y-%m-%d')}"
     plan = ask(PLAN, [{"type": "text", "text": request + note}, *documents(docs)])
     profile, goal = dict(plan.get("profile") or {}), plan["goal"]
     start_url = plan.get("url") or url or "https://html.duckduckgo.com/html/"
@@ -136,7 +147,21 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
 
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
         checked = set()
-        for _ in range(rounds):
+        verify_rounds = recoveries = 0
+
+        def arrival_check():
+            """Verify the page a fresh attempt lands on. A deep link or recovery URL may already be the goal page,
+            and with no action taken yet the mid-run check never looked at it (Wikipedia wandered off its article)."""
+            page_now = agent.state["page"]
+            checked.add(page_key(page_now))
+            early = verify(goal, page_now)
+            if early.get("done"):
+                report(f"VERIFY arrival {early}")
+                agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
+                           evidence=early.get("evidence"))
+
+        arrival_check()
+        while True:
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
@@ -182,6 +207,24 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
                         return {**final, **agent.snapshot()}
+                # Step 4: stuck is not the end. Plan another route and try again in the same tab.
+                if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
+                    recoveries += 1
+                    plan = plan_recovery(goal, agent, ask=ask)
+                    report(f"RECOVER {recoveries}/{MAX_RECOVERIES} after {stop.get('code')}: {plan}")
+                    if plan["action"] == "ask_user" and plan.get("question"):
+                        answer = ask_user(f"{plan['question']} ").strip()
+                        if answer:
+                            agent.restart(f"{plan['goal']}\nUser said: {answer}", plan.get("url"))
+                            checked.clear()
+                            arrival_check()
+                            continue
+                    elif plan["action"] == "retry":
+                        agent.restart(plan["goal"], plan.get("url"))
+                        checked.clear()
+                        arrival_check()
+                        continue
+                    stop = {**stop, "message": f"{stop.get('message')} Recovery: {plan.get('why') or 'gave up'}"}
                 return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
             page = agent.state["page"]
             if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
@@ -189,7 +232,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             else:
                 check = verify(goal, page)
             report(f"VERIFY {check}")
-            if check.get("done"):
+            verify_rounds += 1
+            if check.get("done") or verify_rounds >= rounds:
                 break
             # Re-plan in place: same tab, same history, sharper goal.
             agent.state.update(goal=f"{goal}\nStill missing: {check.get('missing')}", status="ready")

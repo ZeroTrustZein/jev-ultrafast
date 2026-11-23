@@ -83,6 +83,31 @@ class Agent:
             "elements": action_space(self.state["page"]["actions"])[0],
         }
 
+    def restart(self, goal, url=None):
+        """Recovery: a fresh attempt in the same tab, with a new goal and optionally a new start URL.
+
+        The stuck attempt is kept in state["attempts"] so the next recovery plan can see what already failed.
+        History and the decision budget start over, so the new route gets its full step and call budget.
+        """
+        state = self.state
+        state.setdefault("attempts", []).append(
+            {
+                "stop": (state.get("stop_reason") or {}).get("code"),
+                "message": (state.get("stop_reason") or {}).get("message"),
+                "url": (state.get("page") or {}).get("url"),
+                "steps": len(state["history"]),
+                "last_actions": [h.get("action") for h in state["history"][-8:]],
+            }
+        )
+        if url:
+            state["browser"].call("Page.navigate", url=url)
+            state["browser"].wait_ready()
+        state["page"] = state["browser"].observe(screenshot=self.screenshots)
+        state.update(goal=goal, history=[], decisions=[], decision=None, status="ready", stop_reason=None)
+        state.pop("denied", None)
+        self.pending_text = None
+        return self.snapshot()
+
     def without_dead_ends(self, page):
         """The page as the models see it, minus targets that already did nothing twice on this URL.
 
@@ -94,6 +119,15 @@ class Agent:
             if h.get("page_changed") is False and h.get("kind") not in {"wait", "fill"} and h.get("url") == page["url"]:
                 counts[h["action"]] = counts.get(h["action"], 0) + 1
         dead = {label for label, n in counts.items() if n >= 2}
+        # Ping-pong: clicks that change the page but only bounce between two URLs (demoqa: logo -> home, Forms ->
+        # forms, again and again). Those pages change, so the no-change rule above never sees it.
+        recent = self.state["history"][-6:]
+        if len(recent) == 6 and len({h.get("url") for h in recent}) <= 2:
+            repeats = {}
+            for h in recent:
+                if h.get("kind") not in {"wait", "fill"}:
+                    repeats[h["action"]] = repeats.get(h["action"], 0) + 1
+            dead |= {label for label, n in repeats.items() if n >= 2}
         if not dead:
             return page
         kept = [a for a in page["actions"] if a.get("kind") == "wait" or a.get("label") not in dead]
@@ -373,6 +407,15 @@ class Agent:
                     "Stuck: the last 3 actions did not change the page, even with the vision fallback. "
                     f"Repeated: {', '.join(dict.fromkeys(h['action'] for h in repeated))}.",
                 )
+            bounce = state["history"][-10:]
+            if (
+                len(bounce) == 10
+                and len({h.get("url") for h in bounce}) <= 2
+                and len({h["action"] for h in bounce}) <= 3
+                and all(h["kind"] != "wait" for h in bounce)
+            ):
+                urls = " and ".join(dict.fromkeys(h.get("url") for h in bounce))
+                return self.stop("blocked", "loop", f"Going back and forth between {urls} without progress.")
             if idle:
                 if is_empty(state["page"]):
                     message = "The page never rendered any content, even after waiting. It may be blocked or broken."

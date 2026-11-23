@@ -118,6 +118,41 @@ def missing_goal_values(goal, page) -> list:
     return missing
 
 
+_PROHIBITION = re.compile(r"^(read[- ]only|do not|don't|dont|never|no |not |avoid|without|must not|stop before)", re.I)
+
+
+def requirement_check(check) -> dict:
+    """Normalise a verifier reply. With a per-requirement list, done needs every requirement met and quoted.
+
+    Listing requirements one by one makes the verifier look at each value (xe.com: USD->EUR, not EUR->INR) instead of
+    approving a page that only looks similar. The quotes become the evidence that evidence_holds checks.
+    """
+    check = dict(check or {}) if isinstance(check, dict) else {}
+    # Prohibitions ("Read-only: do not log in") can never be quoted from a page, so they are not requirements here.
+    # A violated one shows up as a wrong page instead (a login form, a submitted order).
+    reqs = [
+        r for r in check.get("requirements") or []
+        if isinstance(r, dict) and not _PROHIBITION.match(str(r.get("need") or "").strip())
+    ]
+    if reqs:
+        unmet = [str(r.get("need") or "?") for r in reqs if not r.get("met") or not str(r.get("quote") or "").strip()]
+        check["evidence"] = [str(r.get("quote")) for r in reqs if str(r.get("quote") or "").strip()]
+        if unmet:
+            check["done"] = False
+            check["missing"] = check.get("missing") or "Not shown: " + "; ".join(unmet)
+    return check
+
+
+def field_values(page) -> str:
+    """Typed form values as text. Page text omits what is inside inputs, so a filled form looked empty to verifiers."""
+    lines = [
+        f"{a.get('label')}: {a.get('value')}"
+        for a in page.get("actions", [])
+        if a.get("kind") in {"fill", "select"} and str(a.get("value") or "").strip()
+    ]
+    return "\n".join(dict.fromkeys(lines))
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

@@ -47,7 +47,7 @@ def judge(task, url, text):
 
 def run_one(task, mode="agent"):
     """Child process: drive one task, print one JSON line on stdout."""
-    denied, asked = [], []
+    denied, asked, reports = [], [], []
 
     def approve(action):
         denied.append(action.get("label"))
@@ -65,7 +65,7 @@ def run_one(task, mode="agent"):
     try:
         if mode == "planner":
             from jev_ultrafast import planner
-            st = planner.run(task["goal"], url=task["start_url"], ask_user=ask, report=lambda *_: None)
+            st = planner.run(task["goal"], url=task["start_url"], ask_user=ask, report=lambda *a: reports.append(" ".join(map(str, a))))
         else:
             from jev_ultrafast.agent import Agent, MissingValue
             with Agent(task["start_url"], task["goal"], profile={}, approve=approve) as agent:
@@ -87,7 +87,8 @@ def run_one(task, mode="agent"):
                    url=page.get("url"), title=page.get("title"), last_action=stop.get("last_action"),
                    text_head=text[:400], text=text[:16000])
         if mode == "planner":
-            out.update(verified_done=st.get("done"), missing=st.get("missing"), asked=asked)
+            out.update(verified_done=st.get("done"), missing=st.get("missing"), asked=asked,
+                       report=[r for r in reports if not r.lstrip()[:1].isdigit()][-40:])
         haystack = text + "\n" + json.dumps(page.get("actions") or [], ensure_ascii=False)
         out["pass"] = judge(task, page.get("url"), haystack)
         out["agent_said_done"] = st["status"] == "done"

@@ -425,7 +425,7 @@ def test_planner_never_verifies_a_blocked_run(monkeypatch):
     fake.__exit__ = Mock(return_value=False)
     monkeypatch.setattr(planner, "Agent", Mock(return_value=fake))
     result = planner.run("Find a book", report=lambda _: None)
-    assert result["done"] is False and asked == [planner.PLAN]
+    assert result["done"] is False and asked == [planner.PLAN, planner.VERIFY]  # only the arrival check
 
 
 def test_fenced_json_reply_is_accepted(monkeypatch):
@@ -1051,11 +1051,12 @@ def test_planner_stops_early_once_goal_is_visible(monkeypatch):
     monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     replies = [{"url": "https://example.test/", "goal": "Open the book", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival check on the start page
                {"done": True, "evidence": ["The Book page"], "missing": ""}]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Open the book", report=lambda _: None)
     assert result["done"] is True and agent.state["stop_reason"]["code"] == "verified_done"
-    assert planner.ask.call_count == 2  # no second verification after the early one
+    assert planner.ask.call_count == 3  # plan, arrival, early; no second verification after the early one
 
 
 def test_outcome_check_needs_quoted_proof(monkeypatch):
@@ -1090,6 +1091,7 @@ def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
     monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     replies = [{"url": "https://maps.test/", "goal": "Get directions", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
                {"done": True, "evidence": ["Route: 12 min"], "missing": ""}]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Get directions", report=lambda _: None)
@@ -1099,7 +1101,7 @@ def test_planner_checks_goal_before_calling_a_loop_a_failure(monkeypatch):
 def test_planner_never_overrules_a_refusal(monkeypatch):
     from jev_ultrafast import planner
 
-    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "model_blocked", "message": "no"}})
+    fake = Mock(state={"status": "blocked", "page": page(), "stop_reason": {"code": "error", "message": "crash"}})
     fake.snapshot = Mock(return_value={"page": page()})
     fake.__enter__ = Mock(return_value=fake)
     fake.__exit__ = Mock(return_value=False)
@@ -1107,7 +1109,7 @@ def test_planner_never_overrules_a_refusal(monkeypatch):
     monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
     ask = Mock(return_value={"url": "https://example.test/", "goal": "Find a book", "profile": {}})
     monkeypatch.setattr(planner, "ask", ask)
-    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 1
+    assert planner.run("Find a book", report=lambda _: None)["done"] is False and ask.call_count == 2  # plan, arrival
 
 
 def test_target_that_did_nothing_twice_is_hidden(runner):
@@ -1145,3 +1147,138 @@ def test_typed_field_values_count_as_on_the_page():
     form = {**page(), "text": "Student Registration Form First Name"}
     form["actions"] = [{**page()["actions"][0], "value": "Test"}]
     assert missing_goal_values("Fill First Name 'Test'", form) == []
+
+
+def stuck_agent(code="loop"):
+    agent = loop.Agent.__new__(loop.Agent)
+    agent.screenshots = False
+    agent.pending_text = None
+    browser = Mock(observe=Mock(return_value=page()))
+    agent.state = {"status": "blocked", "page": page(), "history": [{"action": "Go"}], "decisions": [{}],
+                   "goal": "Find a book", "browser": browser, "started_at": None, "elapsed_ms": 0,
+                   "stop_reason": {"code": code, "message": "Stuck"}}
+    agent.snapshot = lambda: dict(agent.state)
+    return agent
+
+
+def test_restart_keeps_the_failed_attempt_and_resets_budgets():
+    agent = stuck_agent()
+    agent.restart("Find a book via search URL", "https://example.test/search?q=book")
+    agent.state["browser"].call.assert_called_once_with("Page.navigate", url="https://example.test/search?q=book")
+    assert agent.state["status"] == "ready" and agent.state["history"] == [] and agent.state["decisions"] == []
+    assert agent.state["attempts"][0]["stop"] == "loop" and agent.state["attempts"][0]["last_actions"] == ["Go"]
+
+
+def test_recovery_keeps_the_original_goal_and_rejects_bad_urls():
+    from jev_ultrafast.recovery import plan_recovery
+
+    reply = {"action": "retry", "url": "javascript:alert(1)", "goal": "Type the date", "why": "picker loops"}
+    plan = plan_recovery("Pick 15 March 2027", stuck_agent(), ask=lambda *_: reply)
+    assert plan["url"] is None and plan["goal"].startswith("Pick 15 March 2027") and "Type the date" in plan["goal"]
+    assert plan_recovery("x", stuck_agent(), ask=lambda *_: "nonsense")["action"] == "give_up"
+
+
+def test_planner_retries_a_stuck_run_on_a_new_route(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    runs = iter([[("blocked", {"code": "loop", "message": "Stuck"})], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://example.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
+        {"done": False, "evidence": [], "missing": "no book"},  # verify after the loop
+        {"action": "retry", "url": "https://example.test/search?q=book", "goal": "Use search", "why": "loop"},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check on the recovery URL
+        {"done": True, "evidence": ["Search"], "missing": ""},  # final verify on the new route
+    ]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None)
+    assert result["done"] is True and agent.state["attempts"][0]["stop"] == "loop"
+
+
+def test_every_requirement_must_be_met_and_quoted(monkeypatch):
+    from jev_ultrafast import planner
+
+    xe = {**page(), "url": "https://xe.test/convert/?Amount=100&From=EUR&To=INR", "text": "100.00 EUR = 9,712 INR"}
+    reply = {
+        "done": True,
+        "requirements": [
+            {"need": "amount 100", "met": True, "quote": "100.00 EUR"},
+            {"need": "from USD", "met": False, "quote": ""},
+            {"need": "to EUR", "met": True, "quote": "EUR"},
+        ],
+    }
+    monkeypatch.setattr(planner, "ask", Mock(return_value=reply))
+    check = planner.verify("Convert 100 US Dollars to Euros", xe)
+    assert check["done"] is False and "from USD" in check["missing"]
+
+
+def test_session_ids_never_repeat():
+    from jev_ultrafast.bridge import new_session_id
+
+    ids = {new_session_id() for _ in range(50)}
+    assert len(ids) == 50
+
+
+def bounce_history(n):
+    hops = [("link", "https://demo.test/"), ("Forms", "https://demo.test/forms")]
+    return [{"action": hops[i % 2][0], "kind": "click", "page_changed": True, "url": hops[i % 2][1]} for i in range(n)]
+
+
+def test_ping_pong_targets_are_hidden(runner):
+    runner.state["history"] = bounce_history(6)
+    seen = runner.without_dead_ends({**page(), "actions": page()["actions"] + [
+        {"id": "e9", "kind": "click", "label": "Forms", "role": "link", "node": 30}]})
+    assert "Forms" in seen["dead_ends"]
+
+
+def test_ping_pong_stops_as_loop(runner):
+    runner.state["history"] = bounce_history(9)
+    runner.state["decision"] = click()
+    runner.state["browser"].observe.return_value = {**page(), "url": "https://demo.test/"}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["stop_reason"]["code"] == "loop" and "back and forth" in runner.state["stop_reason"]["message"]
+
+
+def test_prohibitions_are_not_requirements():
+    from jev_ultrafast.contracts import requirement_check
+
+    check = requirement_check({"done": True, "requirements": [
+        {"need": "Open the Ada Lovelace article", "met": True, "quote": "Ada Lovelace - Wikipedia"},
+        {"need": "Read-only: do not edit or log in", "met": False, "quote": ""},
+        {"need": "Do not sign in", "met": False, "quote": ""},
+    ]})
+    assert check["done"] is True and check["evidence"] == ["Ada Lovelace - Wikipedia"]
+
+
+def test_rate_limit_is_retried_then_succeeds(monkeypatch):
+    responses = [
+        Mock(status_code=429, is_error=True, headers={"retry-after": "0"}),
+        Mock(status_code=200, is_error=False, headers={}, json=Mock(return_value={"choices": [{"message": {}}]})),
+    ]
+    monkeypatch.setattr(model.CLIENT, "post", Mock(side_effect=responses))
+    sleeps = []
+    monkeypatch.setattr(model.time, "sleep", sleeps.append)
+    assert model.post_json("https://x.test", "k", {"messages": []})["choices"]
+    assert sleeps == [1.0]
+
+
+def test_verifier_sees_and_accepts_typed_field_values(monkeypatch):
+    from jev_ultrafast import planner
+
+    form = {**page(), "text": "Student Registration Form", "actions": [{**page()["actions"][0], "value": "Test"}]}
+    ask = Mock(return_value={"done": True, "requirements": [{"need": "First name Test", "met": True, "quote": "Test"}]})
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.verify("Fill First Name 'Test'", form)["done"] is True
+    assert "Search: Test" in json.loads(ask.call_args.args[1])["field_values"]

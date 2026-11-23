@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -329,6 +330,28 @@ def is_empty(page):
     """No text and nothing to act on besides WAIT: the document has not rendered yet."""
     actionable = [a for a in page.get("actions", []) if a.get("kind") != "wait"]
     return not (page.get("text") or "").strip() and not actionable
+
+
+# Human-verification interstitials (Cloudflare, Amazon, Google, generic CAPTCHAs). The agent must never try to solve
+# them; it waits briefly (some clear by themselves) and then asks the person instead of wandering off.
+BOT_WALL = re.compile(
+    r"just a moment\.\.\.|verify(ing)? you are (a )?human|are you a robot|not a robot|robot check|"
+    r"checking (if the site connection is secure|your browser)|attention required.{0,4}cloudflare|"
+    r"enter the characters you see|type the characters you see|unusual traffic from your computer|"
+    r"press (and|&) hold|complete the security check|security verification|captcha",
+    re.I,
+)
+
+
+def bot_wall(page):
+    """The matched phrase when the page is a human check rather than content, else None.
+
+    Short pages only: a long article that mentions CAPTCHAs is not a wall."""
+    text = page.get("text") or ""
+    if len(text) > 2500:
+        return None
+    match = BOT_WALL.search(f"{page.get('title') or ''}\n{text}")
+    return match.group(0) if match else None
 
 
 def fingerprint(state):

@@ -217,6 +217,15 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
                         return {**final, **agent.snapshot()}
+                # A human check is the person's to solve. Ask once per allowance, then look again in the same tab.
+                if stop.get("code") == "bot_check" and recoveries < MAX_RECOVERIES:
+                    recoveries += 1
+                    answer = ask_user(f"{stop.get('message')} Press Enter when done, or type 'skip'. ").strip()
+                    if answer.lower() not in {"skip", "n", "no", "stop"}:
+                        agent.restart(goal)
+                        checked.clear()
+                        arrival_check()
+                        continue
                 # Step 4: stuck is not the end. Plan another route and try again in the same tab.
                 if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
                     recoveries += 1

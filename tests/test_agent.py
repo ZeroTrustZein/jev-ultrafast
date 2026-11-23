@@ -1366,3 +1366,66 @@ def test_load_more_may_be_clicked_repeatedly(runner):
     more = {"id": "e9", "kind": "click", "label": "Load more results", "role": "button", "node": 30}
     runner.state["history"] = [{"action": "Load more results", "kind": "click", "page_changed": True, "url": url}] * 4
     assert "dead_ends" not in runner.without_dead_ends({**page(), "actions": page()["actions"] + [more]})
+
+
+def wall_page():
+    return {**page(), "url": "https://shop.test/errors/validateCaptcha", "title": "Robot Check",
+            "text": "Enter the characters you see below. Sorry, we just need to make sure you're not a robot."}
+
+
+def test_bot_wall_detection_ignores_long_articles():
+    from jev_ultrafast.browser import bot_wall
+
+    assert bot_wall(wall_page())
+    assert bot_wall({"title": "Just a moment...", "text": ""}) == "Just a moment..."
+    assert bot_wall({"title": "CAPTCHA - Wikipedia", "text": "A CAPTCHA is a test. " * 200}) is None
+    assert bot_wall(page()) is None
+
+
+def test_bot_wall_waits_then_asks_the_person(runner, monkeypatch):
+    monkeypatch.setattr(loop, "BOT_WALL_PAUSE", 0)
+    choose = Mock()
+    monkeypatch.setattr(loop, "choose", choose)
+    wall = wall_page()
+    runner.state.update(page=wall, status="ready", decision=None)
+    runner.state["browser"].observe.return_value = wall
+    for _ in range(loop.BOT_WALL_WAITS):
+        runner.command("predict")
+        assert runner.state["decision"]["choice"] == "wait" and runner.state["decision"]["gear"] == 0
+        runner.command("act", {"fingerprint": wall["fingerprint"]})
+    runner.command("predict")
+    stop = runner.state["stop_reason"]
+    assert stop["code"] == "bot_check" and "shop.test" in stop["message"] and "continue" in stop["message"]
+    choose.assert_not_called()
+
+
+@pytest.mark.parametrize("answer, restarted", [("", True), ("skip", False)])
+def test_planner_asks_the_person_to_clear_a_bot_check(monkeypatch, answer, restarted):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    wall = {"code": "bot_check", "message": "shop.test is showing a human-verification check."}
+    runs = iter([[("blocked", wall)], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://shop.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check after the person cleared it
+        {"done": True, "evidence": ["Search"], "missing": ""},
+    ]
+    ask = Mock(side_effect=replies)
+    monkeypatch.setattr(planner, "ask", ask)
+    asked = Mock(return_value=answer)
+    result = planner.run("Find a book", report=lambda _: None, ask_user=asked)
+    assert "human-verification" in asked.call_args.args[0]
+    assert result["done"] is restarted and ask.call_count == (4 if restarted else 2)

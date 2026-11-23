@@ -6,8 +6,9 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-from .browser import Browser, StalePage, is_empty
+from .browser import Browser, StalePage, bot_wall, is_empty
 from .model import MissingValue, action_space, choose, choose_vision, choose_vision_jev, field_context, field_text
 from .questions import MAX_STEPS
 
@@ -18,6 +19,9 @@ IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|c
 # Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
 HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
 
+# Waits on a human-verification page before asking the person (Cloudflare usually clears within ~5 s).
+BOT_WALL_WAITS = 3
+BOT_WALL_PAUSE = 2.0
 # Controls that are meant to be pressed again and again on one URL ("Load more", "Next", "+").
 REPEATABLE = re.compile(r"\b(more|next|previous|prev|load|increase|decrease|add|plus|minus)\b|^[+\-]$", re.I)
 
@@ -223,7 +227,36 @@ class Agent:
                     state["page"]["screenshot"] = shot.get("data")
                 except Exception:
                     pass
-            if is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
+            wall = bot_wall(state["page"])
+            if wall:
+                waited = 0
+                for h in reversed(state["history"]):
+                    if not h.get("wall"):
+                        break
+                    waited += 1
+                if waited >= BOT_WALL_WAITS or not any(a["id"] == "wait" for a in state["page"]["actions"]):
+                    host = urlparse(state["page"].get("url") or "").netloc or "This site"
+                    return self.stop(
+                        "blocked",
+                        "bot_check",
+                        f"{host} is showing a human-verification check (\"{wall}\"). I don't solve those. "
+                        "Please complete it in the browser, then tell me to continue.",
+                    )
+                # Some checks clear on their own after a few seconds. Wait, and never touch the check itself.
+                state["decision"] = {
+                    "choice": "wait",
+                    "operation": "WAIT",
+                    "target": None,
+                    "confidence": 1.0,
+                    "probabilities": {"wait": 1.0},
+                    "latency_ms": 0,
+                    "usage": {},
+                    "gear": 0,
+                    "wall": wall,
+                    "reason": "human-verification page; waiting to see if it clears",
+                }
+                gear2_on = False
+            elif is_empty(state["page"]) and any(a["id"] == "wait" for a in state["page"]["actions"]):
                 # Nothing rendered yet. Asking the models here only produced BLOCKED; wait instead.
                 state["decision"] = {
                     "choice": "wait",
@@ -372,6 +405,8 @@ class Agent:
                     return self.stop(
                         "blocked", "denied", f"You did not approve the sensitive click '{action['label']}'."
                     )
+            if decision.get("wall"):
+                time.sleep(BOT_WALL_PAUSE)
             # Browser.act checks freshness immediately before input, including after text generation.
             state["browser"].act(action, page, text=text)
             self.pending_text = None
@@ -397,6 +432,7 @@ class Agent:
                     "page_changed": None,
                     "url": page["url"],
                     "usage": decision["usage"],
+                    "wall": decision.get("wall"),
                     "executed_ms": round((time.perf_counter() - state["started_at"]) * 1000),
                     "elapsed_ms": state["elapsed_ms"],
                 }

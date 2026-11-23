@@ -189,6 +189,20 @@ def subject_missing(goal, page) -> bool:
     return not any(_value_present(v, hay, share=0) for v in values)
 
 
+# Below this much text a page is a shell (header and nav only) or a page still rendering, never a finished goal.
+THIN_PAGE_CHARS = 300
+
+
+def content_missing(page) -> bool:
+    """True when the page shows almost nothing besides chrome and no filled form, so a "done" cannot be judged.
+
+    Amazon's search URL was accepted while only its 144-character header had rendered: the evidence was the
+    query in the search box and the title, with no results on screen."""
+    if field_values({"actions": [a for a in page.get("actions", []) if "search" not in str(a.get("label")).lower()]}):
+        return False
+    return len(str(page.get("text") or "").strip()) < THIN_PAGE_CHARS
+
+
 def page_key(page) -> tuple:
     """Identity of what a verifier would see: the URL plus the start of the text (results loading changes it)."""
     return (page.get("url"), hash(str(page.get("text") or "")[:3000]))

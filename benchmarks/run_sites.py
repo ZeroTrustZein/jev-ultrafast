@@ -1,12 +1,13 @@
 """Site benchmark: run each task in benchmarks/sites.json through Agent in Brave, one at a time.
 
-Usage:  uv run --env-file .env python benchmarks/run_sites.py [--only id,id] [--timeout 240] [--mode agent|planner]
+Usage:  uv run --env-file .env python benchmarks/run_sites.py [--only id,id] [--timeout 900] [--mode agent|planner]
 Each task runs in its own child process (crash/hang isolation). Sensitive clicks are auto-denied.
 Results go to benchmarks/results/<stamp>-<mode>/ (results.jsonl, stop_log.jsonl, summary.md).
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -98,12 +99,16 @@ def run_one(task, mode="agent"):
     print("@@RESULT " + json.dumps(out), flush=True)
 
 
+# Provider-side failures (quota, overload): the rest of the run would only measure the outage.
+PROVIDER_DOWN = re.compile(r"HTTP (429|502|503|529)")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--only", help="comma-separated task ids")
-    p.add_argument("--timeout", type=int, default=300, help="wall-clock seconds per task")
+    p.add_argument("--timeout", type=int, default=900, help="wall-clock seconds per task")
     p.add_argument("--mode", choices=["agent", "planner"], default="agent", help="driving loop to benchmark")
-    p.add_argument("--max-429", type=int, default=3, help="abort the run after this many HTTP 429 crashes")
+    p.add_argument("--max-429", type=int, default=3, help="abort after this many provider crashes (429/503)")
     p.add_argument("--child", help=argparse.SUPPRESS)
     a = p.parse_args()
     tasks = json.loads(SITES.read_text(encoding="utf-8"))["tasks"]
@@ -144,8 +149,8 @@ def main():
         r.setdefault("elapsed_s", round(time.perf_counter() - t0, 1))
         r["area"], r["start_url"] = t.get("area"), t["start_url"]
         results.append(r)
-        if sum("HTTP 429" in str(x.get("message")) for x in results) > a.max_429:
-            print(f"ABORT: more than {a.max_429} tasks crashed on HTTP 429", flush=True)
+        if sum(bool(PROVIDER_DOWN.search(str(x.get("message")))) for x in results) > a.max_429:
+            print(f"ABORT: more than {a.max_429} tasks crashed on provider errors (HTTP 429/503)", flush=True)
             with open(out_dir / "results.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(r) + chr(10))
             break

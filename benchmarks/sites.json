@@ -8,10 +8,11 @@
       "goal": "Search Amazon for 'usb-c cable'. Read-only: do not open a product page, add to cart, or sign in. Stop on the search results page.",
       "max_steps": 10,
       "success": {
-        "url_contains": [
-          "/s?k="
+        "url_contains": [],
+        "url_any": [
+          "/s?k=",
+          "field-keywords="
         ],
-        "url_any": [],
         "text_any": [
           "results",
           "usb"

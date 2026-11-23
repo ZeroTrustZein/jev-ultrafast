@@ -1429,3 +1429,19 @@ def test_planner_asks_the_person_to_clear_a_bot_check(monkeypatch, answer, resta
     result = planner.run("Find a book", report=lambda _: None, ask_user=asked)
     assert "human-verification" in asked.call_args.args[0]
     assert result["done"] is restarted and ask.call_count == (4 if restarted else 2)
+
+
+def test_search_page_with_only_a_header_is_not_done(monkeypatch):
+    from jev_ultrafast import contracts, planner
+
+    monkeypatch.setattr(contracts, "THIN_PAGE_CHARS", 300)
+    shell = {**page(), "url": "https://shop.test/s?field-keywords=usb-c+cable", "title": "Shop : usb-c cable",
+             "text": "Deliver to Germany  All  Sell",
+             "actions": [{"id": "e1", "kind": "fill", "label": "Search Shop", "value": "usb-c cable", "node": 1}]}
+    reply = {"done": True, "requirements": [{"need": "search results for usb-c cable", "met": True,
+                                             "quote": "Shop : usb-c cable"}]}
+    monkeypatch.setattr(planner, "ask", lambda *_: reply)
+    check = planner.verify("Search the shop for 'usb-c cable'", shell)
+    assert check["done"] is False and "not loaded" in check["missing"]
+    full = {**shell, "text": shell["text"] + "\n1-48 of over 10,000 results for usb-c cable\n" + "Cable 2m " * 60}
+    assert planner.verify("Search the shop for 'usb-c cable'", full)["done"] is True

@@ -90,8 +90,8 @@ pages the agent saw (URL, title, text). Answer the request directly from those p
 few short paragraphs or a short list: the concrete findings (names, prices, links, steps, deadlines) with the URL each
 came from. Use only what the pages show; never invent facts. Claims about delivery, shipping, stock, deadlines or
 eligibility need the page text to say so; otherwise say they were not checked. Keep the user's constraints exactly
-(a minimum such as "14 GB" is also met by more), and say which options meet them and which do not. If the pages do not answer it, say plainly what was
-found, what is missing and why (for example a bot check or a login wall), and the best next step.
+(a minimum such as "14 GB" is also met by more), and say which options meet them and which do not.
+If the pages do not answer it, say plainly what was found, what is missing and why (for example a bot check or a login wall), and the best next step.
 Return JSON: {"answer": "text for the user"}."""
 
 # Pages kept for the final answer, and how much of each page's text.

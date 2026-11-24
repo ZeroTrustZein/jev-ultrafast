@@ -20,6 +20,10 @@ Return JSON: {"action": "retry"|"ask_user"|"give_up", "url": "optional new start
   (e.g. https://www.reddit.com/search/?q=..., https://www.youtube.com/results?search_query=...), or the
   exact page. Use only URLs on the task's site or an official one; never invent personal data.
 - For date pickers and similar widgets, tell the agent to TYPE the value into the field.
+- If the current page is a directory or comparison entry (a programme database, a price-comparison listing) and the
+  missing facts (application steps, deadlines, delivery, full specs) belong to the provider, do not go back to the
+  directory's search: retry with an empty url and a goal to click the provider's own website or offer link on the
+  current page, then read the facts there.
 - Login, CAPTCHA or bot-check pages cannot be bypassed; never try to defeat a CAPTCHA. After a bot check nobody
   cleared (stop bot_check), retry on a different site that offers the same information (another shop, a
   price-comparison site, the official portal, or https://html.duckduckgo.com/html/?q=...), never the walled site.

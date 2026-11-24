@@ -88,7 +88,9 @@ exactly what was asked, never a missing step."""
 ANSWER = """You report back to the user after a browser agent worked on their request. You get the request and the
 pages the agent saw (URL, title, text). Answer the request directly from those pages, in the user's language, in a
 few short paragraphs or a short list: the concrete findings (names, prices, links, steps, deadlines) with the URL each
-came from. Use only what the pages show; never invent facts. If the pages do not answer it, say plainly what was
+came from. Use only what the pages show; never invent facts. Claims about delivery, shipping, stock, deadlines or
+eligibility need the page text to say so; otherwise say they were not checked. Keep the user's constraints exactly
+(a minimum such as "14 GB" is also met by more), and say which options meet them and which do not. If the pages do not answer it, say plainly what was
 found, what is missing and why (for example a bot check or a login wall), and the best next step.
 Return JSON: {"answer": "text for the user"}."""
 
@@ -232,6 +234,9 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
 
     notes = {}
+    # A hard kill loses everything, including the answer; stop early enough to still write it.
+    budget = int(os.environ.get("JEV_MAX_SECONDS", "600"))
+    deadline = time.monotonic() + budget
 
     def finish(result):
         outcome = {k: result.get(k) for k in ("done", "missing", "evidence")}
@@ -262,6 +267,13 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
+                        if time.monotonic() > deadline:
+                            agent.stop(
+                                "blocked",
+                                "time_budget",
+                                f"Used the {budget // 60}-minute time budget; answering with what was found so far.",
+                            )
+                            break
                         last = state["history"][-1] if state["history"] else {}
                         label = " ".join(str(last.get("action") or "").split())[:100]
                         report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {label}")
@@ -300,7 +312,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 # A verifier must not overrule a refusal (BLOCKED, denied, crash). But a run that merely ran out of
                 # road (loop, budget) may be sitting on the finished page, so check that before calling it a failure.
                 stop = agent.state.get("stop_reason") or {}
-                if stop.get("code") in GAVE_UP:
+                if stop.get("code") in GAVE_UP or stop.get("code") == "time_budget":
                     final = verify(goal, agent.state["page"])
                     report(f"VERIFY after {stop['code']} {final}")
                     if final.get("done"):
@@ -321,7 +333,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 else:
                     walled = False
                 # Step 4: stuck is not the end. Plan another route and try again in the same tab.
-                if (walled or stop.get("code") in RECOVERABLE) and recoveries < MAX_RECOVERIES:
+                in_time = time.monotonic() < deadline
+                if (walled or stop.get("code") in RECOVERABLE) and recoveries < MAX_RECOVERIES and in_time:
                     recoveries += 1
                     plan = plan_recovery(goal, agent, ask=ask)
                     report(f"RECOVER {recoveries}/{MAX_RECOVERIES} after {stop.get('code')}: {plan}")
@@ -346,7 +359,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 check = verify(goal, page)
             report(f"VERIFY {check}")
             verify_rounds += 1
-            if check.get("done") or verify_rounds >= rounds:
+            if check.get("done") or verify_rounds >= rounds or time.monotonic() > deadline:
                 break
             # Re-plan in place: same tab, same history, sharper goal.
             agent.state.update(

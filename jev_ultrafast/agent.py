@@ -17,7 +17,9 @@ SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign
 # Always gated, whatever else the label says ("Cancel order" still cancels an order).
 IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|checkout)\b", re.I)
 # Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
-HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
+HARMLESS = re.compile(
+    r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later|price|range|refine|results)\b", re.I
+)
 
 # Waits on a human-verification page before asking the person (Cloudflare usually clears within ~5 s).
 BOT_WALL_WAITS = 3

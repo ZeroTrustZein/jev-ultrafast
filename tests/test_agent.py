@@ -1579,3 +1579,33 @@ def test_answer_retries_with_fewer_pages_when_the_request_is_refused(monkeypatch
 
     monkeypatch.setattr(planner, "ask", ask)
     assert planner.write_answer("q", notes, {"missing": "x" * 5000}) == "ok" and sizes == [8, 4]
+
+
+def test_filter_apply_buttons_are_not_sensitive():
+    assert loop.sensitive("Submit price range") is False
+    assert loop.sensitive("Submit application") is True
+
+
+def test_planner_stops_on_its_time_budget_and_still_answers(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+
+    def run():
+        while True:
+            agent.state["history"].append({"action": "Search", "page_changed": True})
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    monkeypatch.setenv("JEV_MAX_SECONDS", "0")
+    monkeypatch.setattr(planner, "write_answer", lambda *_: "partial answer")
+    replies = [{"url": "https://example.test/", "goal": "Find a book", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival
+               {"done": False, "evidence": [], "missing": "not yet"}]  # verify after the budget stop
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None)
+    assert agent.state["stop_reason"]["code"] == "time_budget" and result["answer"] == "partial answer"

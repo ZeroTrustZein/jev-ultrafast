@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
@@ -244,6 +245,7 @@ class Browser:
         except Exception:
             pass
         page = None
+        timeouts = 0
         empty_deadline = time.monotonic() + EMPTY_PAGE_WAIT
         for attempt in range(25):
             try:
@@ -260,6 +262,14 @@ class Browser:
                     raise
                 time.sleep(0.1)
                 continue
+            except TimeoutError:
+                # The harness daemon sometimes misses one reply ("Runtime.evaluate timed out after 5s"). Observing
+                # is read-only, so asking again is safe; a browser that keeps timing out still raises.
+                timeouts += 1
+                if timeouts > OBSERVE_TIMEOUT_RETRIES:
+                    raise
+                time.sleep(1)
+                continue
             # An empty observation is a page still rendering, not a page with no way forward.
             if is_empty(page) and time.monotonic() < empty_deadline:
                 self.settle(0.5)
@@ -269,7 +279,7 @@ class Browser:
             return page
         raise StalePage("Page did not settle")
 
-    def fresh(self, page, action=None):
+    def fresh(self, page, action=None, loose=False):
         if action is not None and action.get("kind") == "wait":
             return True  # Waiting mutates nothing, so a changed page cannot make it unsafe.
         # Check only the target node and form state, not the whole page: ads and carousels that keep changing
@@ -281,13 +291,17 @@ class Browser:
                     "(() => { const c=window.__jevFast; "
                     f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
                 )
+                if loose:
+                    # Price tickers and ad slots rewrite inputs elsewhere on every frame (geizhals: 87 decisions for
+                    # 7 steps). A click still needs its own element unchanged: same identity, label, state, scope.
+                    return bool(current) and current[1] == page["guards"].get(str(node)) and current[1] is not None
                 return current == [page["page_key"], page["guards"].get(str(node))]
             if action.get("kind") == "coords":
                 return True
         return self.evaluate(MARKER) == page["marker"]
 
-    def act(self, action, page, text=None):
-        if not self.fresh(page, action):
+    def act(self, action, page, text=None, loose=False):
+        if not self.fresh(page, action, loose=loose):
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
@@ -308,6 +322,7 @@ class Browser:
 
 
 EMPTY_PAGE_WAIT = 6.0
+OBSERVE_TIMEOUT_RETRIES = 2
 
 READY_STATE = """(() => ({
   href: location.href,
@@ -338,9 +353,11 @@ BOT_WALL = re.compile(
     r"just a moment\.\.\.|verify(ing)? you are (a )?human|are you a robot|not a robot|robot check|"
     r"checking (if the site connection is secure|your browser)|attention required.{0,4}cloudflare|"
     r"enter the characters you see|type the characters you see|unusual traffic from your computer|"
-    r"press (and|&) hold|complete the security check|security verification|captcha",
+    r"press (and|&) hold|complete the security check|security verification",
     re.I,
 )
+# The bare word is common in page code and footers (github search results); it counts only in the title or URL.
+CAPTCHA = re.compile(r"captcha|challenge|checkpoint", re.I)
 
 
 def bot_wall(page):
@@ -351,6 +368,9 @@ def bot_wall(page):
     if len(text) > 2500:
         return None
     match = BOT_WALL.search(f"{page.get('title') or ''}\n{text}")
+    if match:
+        return match.group(0)
+    match = CAPTCHA.search(f"{page.get('title') or ''} {urlparse(page.get('url') or '').path}")
     return match.group(0) if match else None
 
 

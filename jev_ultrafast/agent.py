@@ -17,11 +17,17 @@ SENSITIVE = re.compile(r"\b(submit|pay|purchase|buy|order|book|confirm|send|sign
 # Always gated, whatever else the label says ("Cancel order" still cancels an order).
 IRREVERSIBLE = re.compile(r"\b(pay|purchase|buy|order|book|confirm|send|delete|checkout)\b", re.I)
 # Soft words (submit, sign, apply) next to these are harmless: "Submit search", "Dismiss sign-in info".
-HARMLESS = re.compile(r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later)\b", re.I)
+HARMLESS = re.compile(
+    r"\b(search|dismiss|close|cancel|no thanks|not now|filters?|sort|skip|later|price|range|refine|results)\b", re.I
+)
 
 # Waits on a human-verification page before asking the person (Cloudflare usually clears within ~5 s).
 BOT_WALL_WAITS = 3
 BOT_WALL_PAUSE = 2.0
+# Consecutive actions lost to a page that changed first; then the run stops as a loop so recovery starts early.
+STALE_LIMIT = 6
+# Browser timeouts in a row that a run rides out before stopping with the error.
+BROWSER_HICCUPS = 2
 # Controls that are meant to be pressed again and again on one URL ("Load more", "Next", "+").
 REPEATABLE = re.compile(r"\b(more|next|previous|prev|load|increase|decrease|add|plus|minus)\b|^[+\-]$", re.I)
 
@@ -31,10 +37,14 @@ def _route(url):
     return parts.netloc, parts.path.rstrip("/")
 
 
-def sensitive(label):
-    label = label or ""
+def sensitive(label, role=None):
+    # Judge the caption a person would read, not page code that leaked into it ("button[type=submit]", "{order:2}").
+    label = " ".join(str(label or "").split())[:200]
     if IRREVERSIBLE.search(label):
         return True
+    # A link only navigates; soft words there are topics ("How to apply?", "Sign language"), not form submissions.
+    if role == "link":
+        return False
     return bool(SENSITIVE.search(label)) and not HARMLESS.search(label)
 
 
@@ -129,6 +139,8 @@ class Agent:
         state["page"] = state["browser"].observe(screenshot=self.screenshots)
         state.update(goal=goal, history=[], decisions=[], decision=None, status="ready", stop_reason=None)
         state.pop("denied", None)
+        state.pop("stale_action", None)
+        state["stale_streak"] = 0
         self.pending_text = None
         return self.snapshot()
 
@@ -204,6 +216,18 @@ class Agent:
                     return self.snapshot()
                 return self.command("act", {"fingerprint": state["page"]["fingerprint"]})
             except StalePage:
+                # Ads, carousels or hidden inputs can change the page between every decision and its action. Re-asking
+                # the models each time burned the whole call budget on one home page (merriam-webster: 120 decisions,
+                # 0 actions). Re-use the decision on the fresh page instead, and stop early if it never settles.
+                state["stale_streak"] = state.get("stale_streak", 0) + 1
+                if state["stale_streak"] >= STALE_LIMIT:
+                    state.pop("stale_action", None)
+                    return self.stop(
+                        "blocked",
+                        "loop",
+                        f"The page changed before each of the last {STALE_LIMIT} actions (ads or animation), "
+                        "so no action could be taken safely.",
+                    )
                 state["decision"] = None
                 state["status"] = "ready"
                 state["page"] = state["browser"].observe(screenshot=self.screenshots)
@@ -279,6 +303,20 @@ class Agent:
                 gear2_on = False
             else:
                 state["decision"] = None
+            stale = state.pop("stale_action", None)
+            if state["decision"] is None and stale:
+                same = (stale["kind"], stale["label"])
+                again = next((a for a in state["page"]["actions"] if (a["kind"], a["label"]) == same), None)
+                if again:
+                    state["decision"] = {
+                        **stale["decision"],
+                        "choice": again["id"],
+                        "probabilities": {again["id"]: 1.0},
+                        "latency_ms": 0,
+                        "usage": {},
+                        "reason": "same choice, re-found on the changed page",
+                    }
+                    gear2_on = False
             try:
                 if state["decision"] is None:
                     state["decision"] = choose(self.without_dead_ends(state["page"]), state["goal"], state["history"])
@@ -375,6 +413,9 @@ class Agent:
                 return self.stop(
                     "blocked", "step_limit", f"Reached the {MAX_STEPS}-action limit without finishing the goal."
                 )
+            # Kept until the action runs: if the page changes first, the next tick re-uses this choice.
+            if action["kind"] in {"click", "select", "fill", "upload"}:
+                state["stale_action"] = {"kind": action["kind"], "label": action["label"], "decision": decision}
             text, helper = None, None
             if action["kind"] == "fill":
                 if not state["browser"].fresh(page):
@@ -405,7 +446,7 @@ class Agent:
                 self.approve
                 and gated
                 and action["kind"] in {"click", "select", "coords"}
-                and sensitive(action["label"])
+                and sensitive(action["label"], action.get("role"))
             ):
                 if not self.approve(action):
                     state["denied"] = action["label"]
@@ -415,7 +456,11 @@ class Agent:
             if decision.get("wall"):
                 time.sleep(BOT_WALL_PAUSE)
             # Browser.act checks freshness immediately before input, including after text generation.
-            state["browser"].act(action, page, text=text)
+            # After two lost tries on a churning page, a click only needs its own target unchanged (see Browser.fresh).
+            loose = state.get("stale_streak", 0) >= 2 and action["kind"] in {"click", "coords"}
+            state["browser"].act(action, page, text=text, loose=loose)
+            state.pop("stale_action", None)
+            state["stale_streak"] = 0
             self.pending_text = None
             if action["kind"] in {"click", "select", "coords"}:
                 time.sleep(0.15)
@@ -506,11 +551,23 @@ class Agent:
         return names[name], helper
 
     def run(self):
+        hiccups = 0
         while self.state["status"] not in {"done", "blocked"}:
             try:
                 yield self.command("tick")
+                hiccups = 0
             except StalePage:
                 time.sleep(0.3)
+                continue
+            except TimeoutError as exc:
+                # The browser daemon sometimes misses a reply. A decision is consumed before any input and executed
+                # actions are logged before observing, so the next tick re-observes rather than repeating an action.
+                hiccups += 1
+                if hiccups > BROWSER_HICCUPS:
+                    yield self.stop("blocked", "error", f"The browser stopped answering: {type(exc).__name__}: {exc}")
+                    continue
+                self.state.update(decision=None, status="ready")
+                time.sleep(1)
                 continue
             except MissingValue:
                 raise  # The caller asks the user, then resumes.

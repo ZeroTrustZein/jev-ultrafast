@@ -1428,7 +1428,8 @@ def test_planner_asks_the_person_to_clear_a_bot_check(monkeypatch, answer, resta
     asked = Mock(return_value=answer)
     result = planner.run("Find a book", report=lambda _: None, ask_user=asked)
     assert "human-verification" in asked.call_args.args[0]
-    assert result["done"] is restarted and ask.call_count == (4 if restarted else 2)
+    # skip: recovery plans another site
+    assert result["done"] is restarted and ask.call_count == (4 if restarted else 3)
 
 
 def test_search_page_with_only_a_header_is_not_done(monkeypatch):
@@ -1445,3 +1446,230 @@ def test_search_page_with_only_a_header_is_not_done(monkeypatch):
     assert check["done"] is False and "not loaded" in check["missing"]
     full = {**shell, "text": shell["text"] + "\n1-48 of over 10,000 results for usb-c cable\n" + "Cable 2m " * 60}
     assert planner.verify("Search the shop for 'usb-c cable'", full)["done"] is True
+
+
+def test_observe_retries_a_daemon_timeout_but_not_forever(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.session, b.allow_upload = "s", False
+    b.evaluate = Mock(return_value=False)
+    b.settle = Mock()
+    monkeypatch.setattr(browser.time, "sleep", lambda _: None)
+    hiccup = TimeoutError("Runtime.evaluate timed out after 5s")
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[hiccup, page()]))
+    assert b.observe(screenshot=False)["text"] == "Search"
+    monkeypatch.setattr(browser, "browser_operation", Mock(side_effect=[hiccup] * 5))
+    with pytest.raises(TimeoutError):
+        b.observe(screenshot=False)
+
+
+def test_field_values_include_ticked_boxes_and_radios():
+    from jev_ultrafast.contracts import field_values
+
+    form = {"actions": [
+        {"kind": "click", "role": "radio", "label": "Other", "checked": True},
+        {"kind": "click", "role": "radio", "label": "Male", "checked": False},
+        {"kind": "click", "role": "checkbox", "label": "Sports", "checked": "true"},
+        {"kind": "fill", "role": "textbox", "label": "First Name", "value": "Test"},
+    ]}
+    assert field_values(form).splitlines() == ["First Name: Test", "Other: checked", "Sports: checked"]
+
+
+def test_stale_action_is_reused_without_asking_the_models(runner, monkeypatch):
+    choose = Mock()
+    monkeypatch.setattr(loop, "choose", choose)
+    runner.state.update(status="ready", decision=None,
+                        stale_action={"kind": "click", "label": "Go", "decision": click()})
+    runner.command("predict")
+    assert runner.state["decision"]["choice"] == "e3" and "stale_action" not in runner.state
+    choose.assert_not_called()
+
+
+def test_page_that_never_settles_stops_as_loop(runner, monkeypatch):
+    monkeypatch.setenv("GEAR2", "0")
+    choose = Mock(side_effect=lambda *_: click())
+    monkeypatch.setattr(loop, "choose", choose)
+    runner.state["browser"].act = Mock(side_effect=loop.StalePage("changed"))
+    for _ in range(loop.STALE_LIMIT):
+        runner.state.update(decision=click(), status="ready")
+        runner.command("tick")
+        if runner.state["status"] == "blocked":
+            break
+    stop = runner.state["stop_reason"]
+    assert stop["code"] == "loop" and "changed before each" in stop["message"]
+    assert choose.call_count == 1  # later ticks re-used the first choice
+
+
+@pytest.mark.keep_answer
+def test_planner_writes_an_answer_from_every_page_it_saw(monkeypatch):
+    from jev_ultrafast import planner
+
+    notes = {}
+    first = {"url": "https://shop.test/a", "title": "PC A", "text": "PC A: RTX 4070 Ti 16 GB, 1899 EUR"}
+    planner.note_page(notes, first)
+    planner.note_page(notes, {"url": "https://shop.test/b", "title": "Blank", "text": ""})
+    planner.note_page(notes, {"url": "https://shop.test/c", "title": "PC C", "text": "PC C: 12 GB, 1399 EUR"})
+    seen = {}
+    monkeypatch.setattr(planner, "ask", lambda system, content: seen.update(json.loads(content)) or {"answer": "PC A"})
+    assert planner.write_answer("cheapest 16 GB PC", notes, {"done": True}) == "PC A"
+    assert [p["url"] for p in seen["pages"]] == ["https://shop.test/a", "https://shop.test/c"]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=RuntimeError("503")))
+    assert "503" in planner.write_answer("q", notes, {})
+
+
+def test_search_engine_start_pages_become_duckduckgo():
+    from jev_ultrafast.planner import avoid_walled_search
+
+    google = "https://www.google.com/search?q=best+14+gb+vram+pc+site:.de"
+    assert avoid_walled_search(google) == "https://html.duckduckgo.com/html/?q=best+14+gb+vram+pc+site%3A.de"
+    assert avoid_walled_search("https://www.google.com/travel/flights") == "https://www.google.com/travel/flights"
+    assert avoid_walled_search("https://geizhals.test/?fs=rtx") == "https://geizhals.test/?fs=rtx"
+
+
+def test_skipped_bot_check_plans_another_site(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    wall = {"code": "bot_check", "message": "search.test is showing a human-verification check."}
+    runs = iter([[("blocked", wall)], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://search.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
+        {"action": "retry", "url": "https://books.test/search?q=book", "goal": "Use the shop", "why": "walled"},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival on the other site
+        {"done": True, "evidence": ["Search"], "missing": ""},
+    ]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None, ask_user=Mock(return_value="skip"))
+    assert result["done"] is True and agent.state["attempts"][0]["stop"] == "bot_check"
+
+
+def test_page_code_in_a_label_is_not_a_sensitive_click():
+    css = "Zum Hauptinhalt Geizhals Logo " + "x " * 200 + ".btn{order:2} button[type=submit]{color:red}"
+    assert loop.sensitive(css) is False
+    assert loop.sensitive("Place order") is True
+
+
+@pytest.mark.keep_answer
+def test_answer_retries_with_fewer_pages_when_the_request_is_refused(monkeypatch):
+    from jev_ultrafast import planner
+
+    notes = {}
+    for i in range(8):
+        planner.note_page(notes, {"url": f"https://shop.test/{i}", "title": str(i), "text": f"page {i}"})
+    sizes = []
+
+    def ask(system, content):
+        sizes.append(len(json.loads(content)["pages"]))
+        if len(sizes) == 1:
+            raise RuntimeError("Model provider returned HTTP 400")
+        return {"answer": "ok"}
+
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.write_answer("q", notes, {"missing": "x" * 5000}) == "ok" and sizes == [8, 4]
+
+
+def test_filter_apply_buttons_are_not_sensitive():
+    assert loop.sensitive("Submit price range") is False
+    assert loop.sensitive("Submit application") is True
+
+
+def test_planner_stops_on_its_time_budget_and_still_answers(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+
+    def run():
+        while True:
+            agent.state["history"].append({"action": "Search", "page_changed": True})
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    monkeypatch.setenv("JEV_MAX_SECONDS", "0")
+    monkeypatch.setattr(planner, "write_answer", lambda *_: "partial answer")
+    replies = [{"url": "https://example.test/", "goal": "Find a book", "profile": {}},
+               {"done": False, "evidence": [], "missing": "not yet"},  # arrival
+               {"done": False, "evidence": [], "missing": "not yet"}]  # verify after the budget stop
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None)
+    assert agent.state["stop_reason"]["code"] == "time_budget" and result["answer"] == "partial answer"
+
+
+def test_links_are_gated_only_for_irreversible_words():
+    assert loop.sensitive("Aufzaehlungszeichen - Promotion - 2 How to apply?", "link") is False
+    assert loop.sensitive("Apply now", "button") is True
+    assert loop.sensitive("Buy now", "link") is True
+
+
+def test_loose_freshness_ignores_churn_elsewhere_but_not_the_target():
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    p = {**page(), "page_key": "k", "guards": {"10": "g"}, "marker": "m"}
+    b.evaluate = Mock(return_value=["ticker moved", "g"])
+    assert b.fresh(p, {"kind": "click", "node": 10}) is False
+    assert b.fresh(p, {"kind": "click", "node": 10}, loose=True) is True
+    b.evaluate.return_value = ["ticker moved", "other"]
+    assert b.fresh(p, {"kind": "click", "node": 10}, loose=True) is False
+    b.evaluate.return_value = ["k", None]
+    assert b.fresh({**p, "guards": {"10": None}}, {"kind": "click", "node": 10}, loose=True) is False
+
+
+def test_captcha_word_in_results_is_not_a_wall():
+    from jev_ultrafast.browser import bot_wall
+
+    results = {"url": "https://code.test/search?q=playwright", "title": "Repository search results",
+               "text": "microsoft/playwright ... recaptcha-solver ... captcha helpers"}
+    assert bot_wall(results) is None
+    assert bot_wall({"url": "https://qa.test/nocaptcha", "title": "Human verification", "text": ""})
+
+
+def test_verifier_outage_is_not_a_crash(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=RuntimeError("Model connection failed")))
+    check = planner.verify("Find a book", page())
+    assert check["done"] is False and "unavailable" in check["missing"]
+
+
+def test_run_rides_out_a_browser_timeout(runner):
+    ticks = iter([TimeoutError("daemon"), {"ok": 1}])
+
+    def command(name, body=None):
+        item = next(ticks)
+        if isinstance(item, Exception):
+            raise item
+        runner.state["status"] = "done"
+        return item
+
+    runner.command = command
+    assert list(runner.run()) == [{"ok": 1}]
+
+
+def test_multi_line_quotes_match_line_by_line():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "Search Results For\nbanana bread\nJanet's Rich Banana Bread\n4,500 Ratings"
+    assert evidence_holds(["Search Results For\nJanet's Rich Banana Bread"], text)
+
+
+def test_checkpoint_url_is_a_wall():
+    from jev_ultrafast.browser import bot_wall
+
+    assert bot_wall({"url": "https://www.shop.test/checkpoint?ref=x", "title": "Shop", "text": "Continue"})

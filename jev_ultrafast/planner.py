@@ -10,11 +10,13 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 from .agent import Agent
 from .contracts import (
@@ -46,7 +48,17 @@ Return JSON:
   * If you are unsure of the exact deep link, provide an official search query like
     'https://html.duckduckgo.com/html/?q=...' so the agent searches and navigates there directly.
     Never leave url empty or invented.
-- goal: state every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
+  * Never start on a general web search engine's results page (google.com/search, bing.com/search): they show
+    bot checks to automated browsers. Prefer the site that holds the answer (a shop's or portal's own search, a
+    price-comparison site of the user's country for buying hardware, the official portal for procedures), or
+    'https://html.duckduckgo.com/html/?q=...'.
+- goal: begin with the user's actual question or request in their words, then the route. A question ("how can I
+  apply", "which is the best/cheapest") is answered by reading pages, so the goal is to open and read the pages that
+  hold the answer (requirements, steps, deadlines, prices, specs), and compare several options when the user asks
+  for the best or cheapest, not to reach one page and stop. Directories and aggregators (programme databases,
+  comparison sites) lead to the source: for how-to-apply or how-to-order questions, follow the link to the
+  provider's own page (the university's application page, the shop's product page) for steps and deadlines.
+  State every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
   Say to stop before any final submission or payment unless the user explicitly asked to submit or pay.
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
   Copy values exactly. Never invent personal information; omit facts you do not have."""
@@ -65,7 +77,75 @@ the opened result) must be visible as the main subject of the page (its heading 
 link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you cannot quote it, done is false.
 Sites show dates in their own format, often without the year ("Fri, Jan 15" for 2027-01-15): that meets a date
 requirement when day and month match. A search is done only when result items are visible, not just the query in
-the search box or the title."""
+the search box or the title.
+Requirements are outcomes, never process steps: "search for X" is met by X's own page or by results for X, not by
+proof that a search box was used. A narrower place is not the place asked for: when the page's heading names a
+district or suburb first ("Westminster, London, England"), a requirement for the city ("London") is NOT met;
+and a tag, topic or category page is not search results.
+Only the values the goal asks for count: never add requirements from the page itself (its filters, price ranges,
+sort order, ads). field_values lists typed values and ticked checkboxes or chosen radios ("Label: checked").
+A field the goal does not mention may hold a value the site filled in
+itself (today's date, a default): ignore it. When the goal says not to submit, send or confirm, an unsent form is
+exactly what was asked, never a missing step."""
+
+
+ANSWER = """You report back to the user after a browser agent worked on their request. You get the request and the
+pages the agent saw (URL, title, text). Answer the request directly from those pages, in the user's language, in a
+few short paragraphs or a short list: the concrete findings (names, prices, links, steps, deadlines) with the URL each
+came from. Use only what the pages show; never invent facts. Claims about specs (memory sizes, models), delivery,
+shipping, stock, deadlines or eligibility need the page text to say so; otherwise say they were not checked.
+Keep the user's constraints as the user meant them: a price cap is a hard maximum, but a spec that does not
+exist in practice (a size no product comes in) means the closest realistic match. Recommend the best matches
+first and say in one line how they differ from what was asked.
+Cite only URLs that appear in the pages list or in their text.
+If the pages do not answer it, say plainly what was found, what is missing and why (for example a bot check or a
+login wall), and the best next step.
+Return JSON: {"answer": "text for the user"}."""
+
+# Pages kept for the final answer, and how much of each page's text.
+NOTE_PAGES = 12
+NOTE_CHARS = 3000
+
+
+def note_page(notes, page):
+    """Remember what the agent saw, newest last, so the final answer can cite every page, not only the last one."""
+    url = page.get("url")
+    text = str(page.get("text") or "").strip()
+    if not url or not text:
+        return
+    notes.pop(url, None)
+    notes[url] = {"url": url, "title": page.get("title"), "text": text[:NOTE_CHARS]}
+    while len(notes) > NOTE_PAGES:
+        notes.pop(next(iter(notes)))
+
+
+def write_answer(request, notes, outcome):
+    """The user asked a question, not for a verdict: turn what the agent saw into an answer."""
+    outcome = {k: (v[:500] if isinstance(v, str) else v) for k, v in (outcome or {}).items()}
+    pages = list(notes.values())
+    reply = None
+    # A provider may refuse a large request; try again with the newest few pages before giving up.
+    for kept in (pages, pages[-4:]):
+        try:
+            reply = ask(ANSWER, json.dumps({"request": request, "outcome": outcome, "pages": kept}))
+            break
+        except Exception as exc:
+            error = exc
+    if reply is None:
+        return f"I could not write up the result ({type(error).__name__}: {error})."
+    return str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else str(reply or "").strip()
+
+
+_WALLED_SEARCH = re.compile(r"^https?://(www\.)?(google|bing)\.[a-z.]+/search\b", re.I)
+
+
+def avoid_walled_search(url):
+    """Search-engine result pages bot-wall automated browsers at once (google.com/sorry); keep the query, swap the
+    engine for DuckDuckGo's HTML page, which stays usable."""
+    if not _WALLED_SEARCH.match(url or ""):
+        return url
+    query = parse_qs(urlparse(url).query).get("q", [""])[0]
+    return "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
 
 
 def verify(goal, page):
@@ -74,7 +154,11 @@ def verify(goal, page):
     content = json.dumps(
         {"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"], "field_values": fields}
     )
-    check = requirement_check(ask(VERIFY, content))
+    try:
+        check = requirement_check(ask(VERIFY, content))
+    except Exception as exc:
+        # One provider blip must not end the run: an unverified page is simply "not confirmed yet".
+        return {"done": False, "missing": f"Verifier unavailable ({type(exc).__name__}: {exc})", "evidence": []}
     proof = check.get("evidence")
     if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"], fields):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}
@@ -155,11 +239,24 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
     note += f"\nToday's date: {time.strftime('%Y-%m-%d')}"
     plan = ask(PLAN, [{"type": "text", "text": request + note}, *documents(docs)])
     profile, goal = dict(plan.get("profile") or {}), plan["goal"]
-    start_url = plan.get("url") or url or "https://html.duckduckgo.com/html/"
+    start_url = avoid_walled_search(plan.get("url") or url or "https://html.duckduckgo.com/html/")
     report(f"PLAN {start_url}\n  goal: {goal}\n  profile: {sorted(profile)}")
 
     def approve(action):
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
+
+    notes = {}
+    # A hard kill loses everything, including the answer; stop early enough to still write it.
+    budget = int(os.environ.get("JEV_MAX_SECONDS", "600"))
+    deadline = time.monotonic() + budget
+
+    def finish(result):
+        outcome = {k: result.get(k) for k in ("done", "missing", "evidence")}
+        outcome["stop"] = (result.get("stop_reason") or {}).get("message")
+        note_page(notes, result.get("page") or {})
+        result["answer"] = write_answer(request, notes, outcome)
+        report(f"ANSWER {result['answer']}")
+        return result
 
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
         checked = set()
@@ -169,6 +266,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             """Verify the page a fresh attempt lands on. A deep link or recovery URL may already be the goal page,
             and with no action taken yet the mid-run check never looked at it (Wikipedia wandered off its article)."""
             page_now = agent.state["page"]
+            note_page(notes, page_now)
             checked.add(page_key(page_now))
             early = verify(goal, page_now)
             if early.get("done"):
@@ -181,10 +279,19 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             while agent.state["status"] not in {"done", "blocked"}:
                 try:
                     for state in agent.run():
+                        if time.monotonic() > deadline:
+                            agent.stop(
+                                "blocked",
+                                "time_budget",
+                                f"Used the {budget // 60}-minute time budget; answering with what was found so far.",
+                            )
+                            break
                         last = state["history"][-1] if state["history"] else {}
-                        report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
+                        label = " ".join(str(last.get("action") or "").split())[:100]
+                        report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {label}")
                         # The fast model often reaches the goal and keeps going. Check when a new URL appears.
                         page_now = agent.state["page"]
+                        note_page(notes, page_now)
                         if (
                             agent.state["status"] == "ready"
                             and last.get("page_changed")
@@ -211,18 +318,19 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.profile[missing.field] = val
                     agent.state["goal"] += f"\nUser provided {missing.field}: {val}"
             if agent.state.get("denied"):
-                return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
+                declined = f"User declined '{agent.state['denied']}'"
+                return finish({"done": False, "missing": declined, **agent.snapshot()})
             if agent.state["status"] == "blocked":
                 # A verifier must not overrule a refusal (BLOCKED, denied, crash). But a run that merely ran out of
                 # road (loop, budget) may be sitting on the finished page, so check that before calling it a failure.
                 stop = agent.state.get("stop_reason") or {}
-                if stop.get("code") in GAVE_UP:
+                if stop.get("code") in GAVE_UP or stop.get("code") == "time_budget":
                     final = verify(goal, agent.state["page"])
                     report(f"VERIFY after {stop['code']} {final}")
                     if final.get("done"):
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
-                        return {**final, **agent.snapshot()}
+                        return finish({**final, **agent.snapshot()})
                 # A human check is the person's to solve. Ask once per allowance, then look again in the same tab.
                 if stop.get("code") == "bot_check" and recoveries < MAX_RECOVERIES:
                     recoveries += 1
@@ -232,8 +340,13 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         checked.clear()
                         arrival_check()
                         continue
+                    # Nobody cleared it: the same information is usually on another site, so plan a route there.
+                    walled = True
+                else:
+                    walled = False
                 # Step 4: stuck is not the end. Plan another route and try again in the same tab.
-                if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
+                in_time = time.monotonic() < deadline
+                if (walled or stop.get("code") in RECOVERABLE) and recoveries < MAX_RECOVERIES and in_time:
                     recoveries += 1
                     plan = plan_recovery(goal, agent, ask=ask)
                     report(f"RECOVER {recoveries}/{MAX_RECOVERIES} after {stop.get('code')}: {plan}")
@@ -250,7 +363,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         arrival_check()
                         continue
                     stop = {**stop, "message": f"{stop.get('message')} Recovery: {plan.get('why') or 'gave up'}"}
-                return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
+                return finish({"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()})
             page = agent.state["page"]
             if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
                 check = {"done": True, "missing": "", "evidence": agent.state["stop_reason"].get("evidence")}
@@ -258,11 +371,15 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 check = verify(goal, page)
             report(f"VERIFY {check}")
             verify_rounds += 1
-            if check.get("done") or verify_rounds >= rounds:
+            if check.get("done") or verify_rounds >= rounds or time.monotonic() > deadline:
                 break
             # Re-plan in place: same tab, same history, sharper goal.
-            agent.state.update(goal=f"{goal}\nStill missing: {check.get('missing')}", status="ready")
-        return {**check, **agent.snapshot()}
+            agent.state.update(
+                goal=f"{goal}\nStill missing: {check.get('missing')}. If this page only summarises it, open the "
+                "provider's own page linked from here (official site, application or product page).",
+                status="ready",
+            )
+        return finish({**check, **agent.snapshot()})
 
 
 def local_laya_port(default=8791):

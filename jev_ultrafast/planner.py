@@ -73,6 +73,40 @@ itself (today's date, a default): ignore it. When the goal says not to submit, s
 exactly what was asked, never a missing step."""
 
 
+ANSWER = """You report back to the user after a browser agent worked on their request. You get the request and the
+pages the agent saw (URL, title, text). Answer the request directly from those pages, in the user's language, in a
+few short paragraphs or a short list: the concrete findings (names, prices, links, steps, deadlines) with the URL each
+came from. Use only what the pages show; never invent facts. If the pages do not answer it, say plainly what was
+found, what is missing and why (for example a bot check or a login wall), and the best next step.
+Return JSON: {"answer": "text for the user"}."""
+
+# Pages kept for the final answer, and how much of each page's text.
+NOTE_PAGES = 12
+NOTE_CHARS = 3000
+
+
+def note_page(notes, page):
+    """Remember what the agent saw, newest last, so the final answer can cite every page, not only the last one."""
+    url = page.get("url")
+    text = str(page.get("text") or "").strip()
+    if not url or not text:
+        return
+    notes.pop(url, None)
+    notes[url] = {"url": url, "title": page.get("title"), "text": text[:NOTE_CHARS]}
+    while len(notes) > NOTE_PAGES:
+        notes.pop(next(iter(notes)))
+
+
+def write_answer(request, notes, outcome):
+    """The user asked a question, not for a verdict: turn what the agent saw into an answer."""
+    content = json.dumps({"request": request, "outcome": outcome, "pages": list(notes.values())})
+    try:
+        reply = ask(ANSWER, content)
+    except Exception as exc:
+        return f"I could not write up the result ({type(exc).__name__}: {exc})."
+    return str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else str(reply or "").strip()
+
+
 def verify(goal, page):
     """Ask the verifier, then accept "done" only if its quoted evidence is really on the page."""
     fields = field_values(page)
@@ -166,6 +200,16 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
     def approve(action):
         return ask_user(f"Agent wants to click '{action['label']}'. Allow? [y/N] ").strip().lower() == "y"
 
+    notes = {}
+
+    def finish(result):
+        outcome = {k: result.get(k) for k in ("done", "missing", "evidence")}
+        outcome["stop"] = (result.get("stop_reason") or {}).get("message")
+        note_page(notes, result.get("page") or {})
+        result["answer"] = write_answer(request, notes, outcome)
+        report(f"ANSWER {result['answer']}")
+        return result
+
     with Agent(start_url, goal, profile=profile, approve=approve, files=files) as agent:
         checked = set()
         verify_rounds = recoveries = 0
@@ -174,6 +218,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             """Verify the page a fresh attempt lands on. A deep link or recovery URL may already be the goal page,
             and with no action taken yet the mid-run check never looked at it (Wikipedia wandered off its article)."""
             page_now = agent.state["page"]
+            note_page(notes, page_now)
             checked.add(page_key(page_now))
             early = verify(goal, page_now)
             if early.get("done"):
@@ -190,6 +235,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
                         # The fast model often reaches the goal and keeps going. Check when a new URL appears.
                         page_now = agent.state["page"]
+                        note_page(notes, page_now)
                         if (
                             agent.state["status"] == "ready"
                             and last.get("page_changed")
@@ -216,7 +262,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         agent.profile[missing.field] = val
                     agent.state["goal"] += f"\nUser provided {missing.field}: {val}"
             if agent.state.get("denied"):
-                return {"done": False, "missing": f"User declined '{agent.state['denied']}'", **agent.snapshot()}
+                declined = f"User declined '{agent.state['denied']}'"
+                return finish({"done": False, "missing": declined, **agent.snapshot()})
             if agent.state["status"] == "blocked":
                 # A verifier must not overrule a refusal (BLOCKED, denied, crash). But a run that merely ran out of
                 # road (loop, budget) may be sitting on the finished page, so check that before calling it a failure.
@@ -227,7 +274,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                     if final.get("done"):
                         agent.stop("done", "verified_done", "The goal is visibly complete on this page.",
                                    evidence=final.get("evidence"), after=stop["code"])
-                        return {**final, **agent.snapshot()}
+                        return finish({**final, **agent.snapshot()})
                 # A human check is the person's to solve. Ask once per allowance, then look again in the same tab.
                 if stop.get("code") == "bot_check" and recoveries < MAX_RECOVERIES:
                     recoveries += 1
@@ -255,7 +302,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         arrival_check()
                         continue
                     stop = {**stop, "message": f"{stop.get('message')} Recovery: {plan.get('why') or 'gave up'}"}
-                return {"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()}
+                return finish({"done": False, "missing": stop.get("message") or "Agent blocked", **agent.snapshot()})
             page = agent.state["page"]
             if (agent.state.get("stop_reason") or {}).get("code") == "verified_done":
                 check = {"done": True, "missing": "", "evidence": agent.state["stop_reason"].get("evidence")}
@@ -267,7 +314,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 break
             # Re-plan in place: same tab, same history, sharper goal.
             agent.state.update(goal=f"{goal}\nStill missing: {check.get('missing')}", status="ready")
-        return {**check, **agent.snapshot()}
+        return finish({**check, **agent.snapshot()})
 
 
 def local_laya_port(default=8791):

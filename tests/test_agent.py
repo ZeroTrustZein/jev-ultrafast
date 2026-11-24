@@ -1498,3 +1498,20 @@ def test_page_that_never_settles_stops_as_loop(runner, monkeypatch):
     stop = runner.state["stop_reason"]
     assert stop["code"] == "loop" and "changed before each" in stop["message"]
     assert choose.call_count == 1  # later ticks re-used the first choice
+
+
+@pytest.mark.keep_answer
+def test_planner_writes_an_answer_from_every_page_it_saw(monkeypatch):
+    from jev_ultrafast import planner
+
+    notes = {}
+    first = {"url": "https://shop.test/a", "title": "PC A", "text": "PC A: RTX 4070 Ti 16 GB, 1899 EUR"}
+    planner.note_page(notes, first)
+    planner.note_page(notes, {"url": "https://shop.test/b", "title": "Blank", "text": ""})
+    planner.note_page(notes, {"url": "https://shop.test/c", "title": "PC C", "text": "PC C: 12 GB, 1399 EUR"})
+    seen = {}
+    monkeypatch.setattr(planner, "ask", lambda system, content: seen.update(json.loads(content)) or {"answer": "PC A"})
+    assert planner.write_answer("cheapest 16 GB PC", notes, {"done": True}) == "PC A"
+    assert [p["url"] for p in seen["pages"]] == ["https://shop.test/a", "https://shop.test/c"]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=RuntimeError("503")))
+    assert "503" in planner.write_answer("q", notes, {})

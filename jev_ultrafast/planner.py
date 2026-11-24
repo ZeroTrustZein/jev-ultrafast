@@ -55,7 +55,9 @@ Return JSON:
 - goal: begin with the user's actual question or request in their words, then the route. A question ("how can I
   apply", "which is the best/cheapest") is answered by reading pages, so the goal is to open and read the pages that
   hold the answer (requirements, steps, deadlines, prices, specs), and compare several options when the user asks
-  for the best or cheapest, not to reach one page and stop.
+  for the best or cheapest, not to reach one page and stop. Directories and aggregators (programme databases,
+  comparison sites) lead to the source: for how-to-apply or how-to-order questions, follow the link to the
+  provider's own page (the university's application page, the shop's product page) for steps and deadlines.
   State every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
   Say to stop before any final submission or payment unless the user explicitly asked to submit or pay.
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
@@ -347,7 +349,11 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
             if check.get("done") or verify_rounds >= rounds:
                 break
             # Re-plan in place: same tab, same history, sharper goal.
-            agent.state.update(goal=f"{goal}\nStill missing: {check.get('missing')}", status="ready")
+            agent.state.update(
+                goal=f"{goal}\nStill missing: {check.get('missing')}. If this page only summarises it, open the "
+                "provider's own page linked from here (official site, application or product page).",
+                status="ready",
+            )
         return finish({**check, **agent.snapshot()})
 
 

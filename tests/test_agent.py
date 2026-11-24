@@ -1609,3 +1609,23 @@ def test_planner_stops_on_its_time_budget_and_still_answers(monkeypatch):
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Find a book", report=lambda _: None)
     assert agent.state["stop_reason"]["code"] == "time_budget" and result["answer"] == "partial answer"
+
+
+def test_links_are_gated_only_for_irreversible_words():
+    assert loop.sensitive("Aufzaehlungszeichen - Promotion - 2 How to apply?", "link") is False
+    assert loop.sensitive("Apply now", "button") is True
+    assert loop.sensitive("Buy now", "link") is True
+
+
+def test_loose_freshness_ignores_churn_elsewhere_but_not_the_target():
+    import jev_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    p = {**page(), "page_key": "k", "guards": {"10": "g"}, "marker": "m"}
+    b.evaluate = Mock(return_value=["ticker moved", "g"])
+    assert b.fresh(p, {"kind": "click", "node": 10}) is False
+    assert b.fresh(p, {"kind": "click", "node": 10}, loose=True) is True
+    b.evaluate.return_value = ["ticker moved", "other"]
+    assert b.fresh(p, {"kind": "click", "node": 10}, loose=True) is False
+    b.evaluate.return_value = ["k", None]
+    assert b.fresh({**p, "guards": {"10": None}}, {"kind": "click", "node": 10}, loose=True) is False

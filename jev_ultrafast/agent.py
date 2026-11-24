@@ -35,11 +35,14 @@ def _route(url):
     return parts.netloc, parts.path.rstrip("/")
 
 
-def sensitive(label):
+def sensitive(label, role=None):
     # Judge the caption a person would read, not page code that leaked into it ("button[type=submit]", "{order:2}").
     label = " ".join(str(label or "").split())[:200]
     if IRREVERSIBLE.search(label):
         return True
+    # A link only navigates; soft words there are topics ("How to apply?", "Sign language"), not form submissions.
+    if role == "link":
+        return False
     return bool(SENSITIVE.search(label)) and not HARMLESS.search(label)
 
 
@@ -441,7 +444,7 @@ class Agent:
                 self.approve
                 and gated
                 and action["kind"] in {"click", "select", "coords"}
-                and sensitive(action["label"])
+                and sensitive(action["label"], action.get("role"))
             ):
                 if not self.approve(action):
                     state["denied"] = action["label"]
@@ -451,7 +454,9 @@ class Agent:
             if decision.get("wall"):
                 time.sleep(BOT_WALL_PAUSE)
             # Browser.act checks freshness immediately before input, including after text generation.
-            state["browser"].act(action, page, text=text)
+            # After two lost tries on a churning page, a click only needs its own target unchanged (see Browser.fresh).
+            loose = state.get("stale_streak", 0) >= 2 and action["kind"] in {"click", "coords"}
+            state["browser"].act(action, page, text=text, loose=loose)
             state.pop("stale_action", None)
             state["stale_streak"] = 0
             self.pending_text = None

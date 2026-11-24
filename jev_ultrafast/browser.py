@@ -278,7 +278,7 @@ class Browser:
             return page
         raise StalePage("Page did not settle")
 
-    def fresh(self, page, action=None):
+    def fresh(self, page, action=None, loose=False):
         if action is not None and action.get("kind") == "wait":
             return True  # Waiting mutates nothing, so a changed page cannot make it unsafe.
         # Check only the target node and form state, not the whole page: ads and carousels that keep changing
@@ -290,13 +290,17 @@ class Browser:
                     "(() => { const c=window.__jevFast; "
                     f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
                 )
+                if loose:
+                    # Price tickers and ad slots rewrite inputs elsewhere on every frame (geizhals: 87 decisions for
+                    # 7 steps). A click still needs its own element unchanged: same identity, label, state, scope.
+                    return bool(current) and current[1] == page["guards"].get(str(node)) and current[1] is not None
                 return current == [page["page_key"], page["guards"].get(str(node))]
             if action.get("kind") == "coords":
                 return True
         return self.evaluate(MARKER) == page["marker"]
 
-    def act(self, action, page, text=None):
-        if not self.fresh(page, action):
+    def act(self, action, page, text=None, loose=False):
+        if not self.fresh(page, action, loose=loose):
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)

@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
@@ -352,9 +353,11 @@ BOT_WALL = re.compile(
     r"just a moment\.\.\.|verify(ing)? you are (a )?human|are you a robot|not a robot|robot check|"
     r"checking (if the site connection is secure|your browser)|attention required.{0,4}cloudflare|"
     r"enter the characters you see|type the characters you see|unusual traffic from your computer|"
-    r"press (and|&) hold|complete the security check|security verification|captcha",
+    r"press (and|&) hold|complete the security check|security verification",
     re.I,
 )
+# The bare word is common in page code and footers (github search results); it counts only in the title or URL.
+CAPTCHA = re.compile(r"captcha|challenge", re.I)
 
 
 def bot_wall(page):
@@ -365,6 +368,9 @@ def bot_wall(page):
     if len(text) > 2500:
         return None
     match = BOT_WALL.search(f"{page.get('title') or ''}\n{text}")
+    if match:
+        return match.group(0)
+    match = CAPTCHA.search(f"{page.get('title') or ''} {urlparse(page.get('url') or '').path}")
     return match.group(0) if match else None
 
 

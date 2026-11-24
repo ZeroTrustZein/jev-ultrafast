@@ -26,6 +26,8 @@ BOT_WALL_WAITS = 3
 BOT_WALL_PAUSE = 2.0
 # Consecutive actions lost to a page that changed first; then the run stops as a loop so recovery starts early.
 STALE_LIMIT = 6
+# Browser timeouts in a row that a run rides out before stopping with the error.
+BROWSER_HICCUPS = 2
 # Controls that are meant to be pressed again and again on one URL ("Load more", "Next", "+").
 REPEATABLE = re.compile(r"\b(more|next|previous|prev|load|increase|decrease|add|plus|minus)\b|^[+\-]$", re.I)
 
@@ -549,11 +551,23 @@ class Agent:
         return names[name], helper
 
     def run(self):
+        hiccups = 0
         while self.state["status"] not in {"done", "blocked"}:
             try:
                 yield self.command("tick")
+                hiccups = 0
             except StalePage:
                 time.sleep(0.3)
+                continue
+            except TimeoutError as exc:
+                # The browser daemon sometimes misses a reply. A decision is consumed before any input and executed
+                # actions are logged before observing, so the next tick re-observes rather than repeating an action.
+                hiccups += 1
+                if hiccups > BROWSER_HICCUPS:
+                    yield self.stop("blocked", "error", f"The browser stopped answering: {type(exc).__name__}: {exc}")
+                    continue
+                self.state.update(decision=None, status="ready")
+                time.sleep(1)
                 continue
             except MissingValue:
                 raise  # The caller asks the user, then resumes.

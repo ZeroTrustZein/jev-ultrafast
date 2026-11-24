@@ -78,6 +78,9 @@ link, a recent-searches chip or a sidebar. Quote evidence verbatim; if you canno
 Sites show dates in their own format, often without the year ("Fri, Jan 15" for 2027-01-15): that meets a date
 requirement when day and month match. A search is done only when result items are visible, not just the query in
 the search box or the title.
+Requirements are outcomes, never process steps: "search for X" is met by X's own page or by results for X, not by
+proof that a search box was used. A narrower place is not the place asked for (a district or suburb page is not the
+city's forecast), and a tag, topic or category page is not search results.
 Only the values the goal asks for count: never add requirements from the page itself (its filters, price ranges,
 sort order, ads). field_values lists typed values and ticked checkboxes or chosen radios ("Label: checked").
 A field the goal does not mention may hold a value the site filled in
@@ -88,9 +91,9 @@ exactly what was asked, never a missing step."""
 ANSWER = """You report back to the user after a browser agent worked on their request. You get the request and the
 pages the agent saw (URL, title, text). Answer the request directly from those pages, in the user's language, in a
 few short paragraphs or a short list: the concrete findings (names, prices, links, steps, deadlines) with the URL each
-came from. Use only what the pages show; never invent facts. Claims about delivery, shipping, stock, deadlines or
-eligibility need the page text to say so; otherwise say they were not checked. Keep the user's constraints exactly
-as the user meant them: a price cap is a hard maximum, but a spec that does not exist in practice (a size no product
+came from. Use only what the pages show; never invent facts. Claims about specs (memory sizes, models), delivery,
+shipping, stock, deadlines or eligibility need the page text to say so; otherwise say they were not checked.
+Keep the user's constraints as the user meant them: a price cap is a hard maximum, but a spec that does not exist in practice (a size no product
 comes in) means the closest realistic match. Recommend the best matches first and say in one line how they differ
 from what was asked.
 Cite only URLs that appear in the pages list or in their text.
@@ -150,7 +153,11 @@ def verify(goal, page):
     content = json.dumps(
         {"goal": goal, "url": page["url"], "title": page.get("title"), "page": page["text"], "field_values": fields}
     )
-    check = requirement_check(ask(VERIFY, content))
+    try:
+        check = requirement_check(ask(VERIFY, content))
+    except Exception as exc:
+        # One provider blip must not end the run: an unverified page is simply "not confirmed yet".
+        return {"done": False, "missing": f"Verifier unavailable ({type(exc).__name__}: {exc})", "evidence": []}
     proof = check.get("evidence")
     if check.get("done") and not evidence_holds(proof, page.get("text"), page.get("title"), page["url"], fields):
         check = {**check, "done": False, "missing": check.get("missing") or "Verifier evidence is not on the page."}

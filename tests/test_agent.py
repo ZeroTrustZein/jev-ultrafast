@@ -1629,3 +1629,34 @@ def test_loose_freshness_ignores_churn_elsewhere_but_not_the_target():
     assert b.fresh(p, {"kind": "click", "node": 10}, loose=True) is False
     b.evaluate.return_value = ["k", None]
     assert b.fresh({**p, "guards": {"10": None}}, {"kind": "click", "node": 10}, loose=True) is False
+
+
+def test_captcha_word_in_results_is_not_a_wall():
+    from jev_ultrafast.browser import bot_wall
+
+    results = {"url": "https://code.test/search?q=playwright", "title": "Repository search results",
+               "text": "microsoft/playwright ... recaptcha-solver ... captcha helpers"}
+    assert bot_wall(results) is None
+    assert bot_wall({"url": "https://qa.test/nocaptcha", "title": "Human verification", "text": ""})
+
+
+def test_verifier_outage_is_not_a_crash(monkeypatch):
+    from jev_ultrafast import planner
+
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=RuntimeError("Model connection failed")))
+    check = planner.verify("Find a book", page())
+    assert check["done"] is False and "unavailable" in check["missing"]
+
+
+def test_run_rides_out_a_browser_timeout(runner):
+    ticks = iter([TimeoutError("daemon"), {"ok": 1}])
+
+    def command(name, body=None):
+        item = next(ticks)
+        if isinstance(item, Exception):
+            raise item
+        runner.state["status"] = "done"
+        return item
+
+    runner.command = command
+    assert list(runner.run()) == [{"ok": 1}]

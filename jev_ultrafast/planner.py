@@ -94,8 +94,8 @@ few short paragraphs or a short list: the concrete findings (names, prices, link
 came from. Use only what the pages show; never invent facts. Claims about specs (memory sizes, models), delivery,
 shipping, stock, deadlines or eligibility need the page text to say so; otherwise say they were not checked.
 Keep the user's constraints as the user meant them: a price cap is a hard maximum, but a spec that does not
-exist in practice (a size no product comes in) means the closest realistic match. Recommend the best matches first and say in one line how they differ
-from what was asked.
+exist in practice (a size no product comes in) means the closest realistic match. Recommend the best matches
+first and say in one line how they differ from what was asked.
 Cite only URLs that appear in the pages list or in their text.
 If the pages do not answer it, say plainly what was found, what is missing and why (for example a bot check or a
 login wall), and the best next step.

@@ -10,11 +10,13 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 from .agent import Agent
 from .contracts import (
@@ -46,7 +48,15 @@ Return JSON:
   * If you are unsure of the exact deep link, provide an official search query like
     'https://html.duckduckgo.com/html/?q=...' so the agent searches and navigates there directly.
     Never leave url empty or invented.
-- goal: state every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
+  * Never start on a general web search engine's results page (google.com/search, bing.com/search): they show
+    bot checks to automated browsers. Prefer the site that holds the answer (a shop's or portal's own search, a
+    price-comparison site of the user's country for buying hardware, the official portal for procedures), or
+    'https://html.duckduckgo.com/html/?q=...'.
+- goal: begin with the user's actual question or request in their words, then the route. A question ("how can I
+  apply", "which is the best/cheapest") is answered by reading pages, so the goal is to open and read the pages that
+  hold the answer (requirements, steps, deadlines, prices, specs), and compare several options when the user asks
+  for the best or cheapest, not to reach one page and stop.
+  State every requirement explicitly (fields to fill, choices to make, where to stop). Include concrete values.
   Say to stop before any final submission or payment unless the user explicitly asked to submit or pay.
 - profile: flat facts from the documents the agent may need to type (names, dates, numbers, addresses, emails).
   Copy values exactly. Never invent personal information; omit facts you do not have."""
@@ -105,6 +115,18 @@ def write_answer(request, notes, outcome):
     except Exception as exc:
         return f"I could not write up the result ({type(exc).__name__}: {exc})."
     return str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else str(reply or "").strip()
+
+
+_WALLED_SEARCH = re.compile(r"^https?://(www\.)?(google|bing)\.[a-z.]+/search\b", re.I)
+
+
+def avoid_walled_search(url):
+    """Search-engine result pages bot-wall automated browsers at once (google.com/sorry); keep the query, swap the
+    engine for DuckDuckGo's HTML page, which stays usable."""
+    if not _WALLED_SEARCH.match(url or ""):
+        return url
+    query = parse_qs(urlparse(url).query).get("q", [""])[0]
+    return "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
 
 
 def verify(goal, page):
@@ -194,7 +216,7 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
     note += f"\nToday's date: {time.strftime('%Y-%m-%d')}"
     plan = ask(PLAN, [{"type": "text", "text": request + note}, *documents(docs)])
     profile, goal = dict(plan.get("profile") or {}), plan["goal"]
-    start_url = plan.get("url") or url or "https://html.duckduckgo.com/html/"
+    start_url = avoid_walled_search(plan.get("url") or url or "https://html.duckduckgo.com/html/")
     report(f"PLAN {start_url}\n  goal: {goal}\n  profile: {sorted(profile)}")
 
     def approve(action):
@@ -232,7 +254,8 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                 try:
                     for state in agent.run():
                         last = state["history"][-1] if state["history"] else {}
-                        report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {last.get('action', '')}")
+                        label = " ".join(str(last.get("action") or "").split())[:100]
+                        report(f"{state['elapsed_ms']:>6} ms  {state['status']:<9} {label}")
                         # The fast model often reaches the goal and keeps going. Check when a new URL appears.
                         page_now = agent.state["page"]
                         note_page(notes, page_now)
@@ -284,8 +307,12 @@ def run(request, docs=(), *, url=None, files=(), ask_user=input, report=print, r
                         checked.clear()
                         arrival_check()
                         continue
+                    # Nobody cleared it: the same information is usually on another site, so plan a route there.
+                    walled = True
+                else:
+                    walled = False
                 # Step 4: stuck is not the end. Plan another route and try again in the same tab.
-                if stop.get("code") in RECOVERABLE and recoveries < MAX_RECOVERIES:
+                if (walled or stop.get("code") in RECOVERABLE) and recoveries < MAX_RECOVERIES:
                     recoveries += 1
                     plan = plan_recovery(goal, agent, ask=ask)
                     report(f"RECOVER {recoveries}/{MAX_RECOVERIES} after {stop.get('code')}: {plan}")

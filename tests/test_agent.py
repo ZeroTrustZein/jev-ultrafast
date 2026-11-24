@@ -1428,7 +1428,8 @@ def test_planner_asks_the_person_to_clear_a_bot_check(monkeypatch, answer, resta
     asked = Mock(return_value=answer)
     result = planner.run("Find a book", report=lambda _: None, ask_user=asked)
     assert "human-verification" in asked.call_args.args[0]
-    assert result["done"] is restarted and ask.call_count == (4 if restarted else 2)
+    # skip: recovery plans another site
+    assert result["done"] is restarted and ask.call_count == (4 if restarted else 3)
 
 
 def test_search_page_with_only_a_header_is_not_done(monkeypatch):
@@ -1515,3 +1516,41 @@ def test_planner_writes_an_answer_from_every_page_it_saw(monkeypatch):
     assert [p["url"] for p in seen["pages"]] == ["https://shop.test/a", "https://shop.test/c"]
     monkeypatch.setattr(planner, "ask", Mock(side_effect=RuntimeError("503")))
     assert "503" in planner.write_answer("q", notes, {})
+
+
+def test_search_engine_start_pages_become_duckduckgo():
+    from jev_ultrafast.planner import avoid_walled_search
+
+    google = "https://www.google.com/search?q=best+14+gb+vram+pc+site:.de"
+    assert avoid_walled_search(google) == "https://html.duckduckgo.com/html/?q=best+14+gb+vram+pc+site%3A.de"
+    assert avoid_walled_search("https://www.google.com/travel/flights") == "https://www.google.com/travel/flights"
+    assert avoid_walled_search("https://geizhals.test/?fs=rtx") == "https://geizhals.test/?fs=rtx"
+
+
+def test_skipped_bot_check_plans_another_site(monkeypatch):
+    from jev_ultrafast import planner
+
+    agent = stuck_agent()
+    agent.state["status"] = "ready"
+    wall = {"code": "bot_check", "message": "search.test is showing a human-verification check."}
+    runs = iter([[("blocked", wall)], [("done", {"code": "done", "message": "ok"})]])
+
+    def run():
+        for status, stop in next(runs):
+            agent.state.update(status=status, stop_reason=stop)
+            yield agent.snapshot()
+
+    agent.run = run
+    ctx = Mock(__enter__=Mock(return_value=agent), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(planner, "Agent", lambda *a, **k: ctx)
+    monkeypatch.setattr(planner, "ensure_local_server", lambda: None)
+    replies = [
+        {"url": "https://search.test/", "goal": "Find a book", "profile": {}},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival check
+        {"action": "retry", "url": "https://books.test/search?q=book", "goal": "Use the shop", "why": "walled"},
+        {"done": False, "evidence": [], "missing": "not yet"},  # arrival on the other site
+        {"done": True, "evidence": ["Search"], "missing": ""},
+    ]
+    monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
+    result = planner.run("Find a book", report=lambda _: None, ask_user=Mock(return_value="skip"))
+    assert result["done"] is True and agent.state["attempts"][0]["stop"] == "bot_check"

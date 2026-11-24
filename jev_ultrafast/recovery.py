@@ -20,8 +20,10 @@ Return JSON: {"action": "retry"|"ask_user"|"give_up", "url": "optional new start
   (e.g. https://www.reddit.com/search/?q=..., https://www.youtube.com/results?search_query=...), or the
   exact page. Use only URLs on the task's site or an official one; never invent personal data.
 - For date pickers and similar widgets, tell the agent to TYPE the value into the field.
-- Login, CAPTCHA or bot-check pages cannot be bypassed: choose ask_user (if the user can help, e.g. by signing in
-  themselves) or give_up. Never try to defeat a CAPTCHA.
+- Login, CAPTCHA or bot-check pages cannot be bypassed; never try to defeat a CAPTCHA. After a bot check nobody
+  cleared (stop bot_check), retry on a different site that offers the same information (another shop, a
+  price-comparison site, the official portal, or https://html.duckduckgo.com/html/?q=...), never the walled site.
+  For a login only the user can do, choose ask_user or give_up.
 - Keep every requirement and stopping rule of the original goal, including "do not submit/sign in/pay"."""
 
 

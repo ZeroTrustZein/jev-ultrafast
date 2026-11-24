@@ -1554,3 +1554,28 @@ def test_skipped_bot_check_plans_another_site(monkeypatch):
     monkeypatch.setattr(planner, "ask", Mock(side_effect=replies))
     result = planner.run("Find a book", report=lambda _: None, ask_user=Mock(return_value="skip"))
     assert result["done"] is True and agent.state["attempts"][0]["stop"] == "bot_check"
+
+
+def test_page_code_in_a_label_is_not_a_sensitive_click():
+    css = "Zum Hauptinhalt Geizhals Logo " + "x " * 200 + ".btn{order:2} button[type=submit]{color:red}"
+    assert loop.sensitive(css) is False
+    assert loop.sensitive("Place order") is True
+
+
+@pytest.mark.keep_answer
+def test_answer_retries_with_fewer_pages_when_the_request_is_refused(monkeypatch):
+    from jev_ultrafast import planner
+
+    notes = {}
+    for i in range(8):
+        planner.note_page(notes, {"url": f"https://shop.test/{i}", "title": str(i), "text": f"page {i}"})
+    sizes = []
+
+    def ask(system, content):
+        sizes.append(len(json.loads(content)["pages"]))
+        if len(sizes) == 1:
+            raise RuntimeError("Model provider returned HTTP 400")
+        return {"answer": "ok"}
+
+    monkeypatch.setattr(planner, "ask", ask)
+    assert planner.write_answer("q", notes, {"missing": "x" * 5000}) == "ok" and sizes == [8, 4]

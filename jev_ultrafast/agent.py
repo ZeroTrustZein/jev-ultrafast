@@ -34,7 +34,8 @@ def _route(url):
 
 
 def sensitive(label):
-    label = label or ""
+    # Judge the caption a person would read, not page code that leaked into it ("button[type=submit]", "{order:2}").
+    label = " ".join(str(label or "").split())[:200]
     if IRREVERSIBLE.search(label):
         return True
     return bool(SENSITIVE.search(label)) and not HARMLESS.search(label)

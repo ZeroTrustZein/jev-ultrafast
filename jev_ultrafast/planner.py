@@ -109,11 +109,18 @@ def note_page(notes, page):
 
 def write_answer(request, notes, outcome):
     """The user asked a question, not for a verdict: turn what the agent saw into an answer."""
-    content = json.dumps({"request": request, "outcome": outcome, "pages": list(notes.values())})
-    try:
-        reply = ask(ANSWER, content)
-    except Exception as exc:
-        return f"I could not write up the result ({type(exc).__name__}: {exc})."
+    outcome = {k: (v[:500] if isinstance(v, str) else v) for k, v in (outcome or {}).items()}
+    pages = list(notes.values())
+    reply = None
+    # A provider may refuse a large request; try again with the newest few pages before giving up.
+    for kept in (pages, pages[-4:]):
+        try:
+            reply = ask(ANSWER, json.dumps({"request": request, "outcome": outcome, "pages": kept}))
+            break
+        except Exception as exc:
+            error = exc
+    if reply is None:
+        return f"I could not write up the result ({type(error).__name__}: {error})."
     return str((reply or {}).get("answer") or "").strip() if isinstance(reply, dict) else str(reply or "").strip()
 
 

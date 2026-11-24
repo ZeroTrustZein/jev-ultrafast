@@ -50,13 +50,16 @@
     }
     return '';
   };
+  const NOT_TEXT=new Set(['STYLE','SCRIPT','NOSCRIPT','TEMPLATE']), LABEL_MAX=200;
   const name = (e,seen=new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
       .map(id=>name(byId(e,id),seen)).filter(Boolean).join(' ');
+    // Style and script text is code, not a caption (a geizhals header link once carried 186 KB of CSS and JS).
     const childText=(e.tagName==='INPUT'||e.tagName==='TEXTAREA'?'':[...e.childNodes].map(n=>n.nodeType===3?n.textContent:
-      n.nodeType===1&&n.getAttribute('aria-hidden')!=='true'?name(n,seen):'').join(' ').trim());
+      n.nodeType===1&&n.getAttribute('aria-hidden')!=='true'&&!NOT_TEXT.has(n.tagName)?name(n,seen):'')
+      .join(' ').replace(/\s+/g,' ').trim());
     const fnMatch=(e.getAttribute('onclick')||'').match(/(?:select|click|open|remove|delete|add|trash|download|copy)\(['"]([^'"]+)['"]\)/i);
     const fnHint=fnMatch?fnMatch[1]:'';
     const svgEl=e.querySelector?e.querySelector('svg'):null;
@@ -71,7 +74,9 @@
       (e.tagName==='TEXTAREA' ? (e.getAttribute('placeholder') || e.getAttribute('title') || e.id || e.name || 'Wikitext editor') : '') ||
       childText || e.getAttribute('title') || e.getAttribute('placeholder') || fnHint || svgHint || nearbyLabel(e) ||
       (attrHint && !attrHint.startsWith('__') ? humanize(attrHint) : '');
-    return baseName ? (baseName + statusSuffix).trim() : '';
+    if (!baseName) return '';
+    const short=baseName.length>LABEL_MAX ? baseName.slice(0,LABEL_MAX).trimEnd()+'…' : baseName;
+    return (short + statusSuffix).trim();
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
     'option','gridcell','combobox','textbox','searchbox','spinbutton','treeitem','listitem'];

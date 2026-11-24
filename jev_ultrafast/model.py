@@ -30,7 +30,7 @@ def post_json(url, key, body, headers=None):
                 raise RuntimeError("Model connection failed; no action executed.") from None
             # Rate limits and gateway hiccups (429, 502) ended whole benchmark runs. Model calls mutate nothing, so
             # waiting and asking again is safe; honour Retry-After, capped so a stuck provider still fails fast.
-            if response.status_code in {429, 502, 503, 504, 529} and attempt < 3:
+            if (response.status_code == 429 or response.status_code >= 500) and attempt < 3:
                 try:
                     wait = float(response.headers.get("retry-after") or 0)
                 except ValueError:

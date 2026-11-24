@@ -79,8 +79,9 @@ Sites show dates in their own format, often without the year ("Fri, Jan 15" for 
 requirement when day and month match. A search is done only when result items are visible, not just the query in
 the search box or the title.
 Requirements are outcomes, never process steps: "search for X" is met by X's own page or by results for X, not by
-proof that a search box was used. A narrower place is not the place asked for (a district or suburb page is not the
-city's forecast), and a tag, topic or category page is not search results.
+proof that a search box was used. A narrower place is not the place asked for: when the page's heading names a
+district or suburb first ("Westminster, London, England"), a requirement for the city ("London") is NOT met;
+and a tag, topic or category page is not search results.
 Only the values the goal asks for count: never add requirements from the page itself (its filters, price ranges,
 sort order, ads). field_values lists typed values and ticked checkboxes or chosen radios ("Label: checked").
 A field the goal does not mention may hold a value the site filled in

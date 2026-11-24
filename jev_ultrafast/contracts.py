@@ -81,7 +81,8 @@ def evidence_holds(evidence, page_text, *also) -> bool:
     count as page content too (the verifier sees them), and a quote with "..." must match piece by piece.
     """
     quotes = [evidence] if isinstance(evidence, str) else list(evidence or [])
-    pieces = [_plain(p) for q in quotes for p in re.split(r"\.\.\.|…", str(q))]
+    # A quote stitched from several lines (a heading plus the first results) must match line by line.
+    pieces = [_plain(p) for q in quotes for p in re.split(r"\.\.\.|…|\n", str(q))]
     pieces = [p for p in pieces if p]
     text = _plain(" ".join(str(t or "") for t in (page_text, *also)))
     return bool(pieces) and all(len(p) >= 3 and p in text for p in pieces)

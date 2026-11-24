@@ -357,7 +357,7 @@ BOT_WALL = re.compile(
     re.I,
 )
 # The bare word is common in page code and footers (github search results); it counts only in the title or URL.
-CAPTCHA = re.compile(r"captcha|challenge", re.I)
+CAPTCHA = re.compile(r"captcha|challenge|checkpoint", re.I)
 
 
 def bot_wall(page):

@@ -1660,3 +1660,16 @@ def test_run_rides_out_a_browser_timeout(runner):
 
     runner.command = command
     assert list(runner.run()) == [{"ok": 1}]
+
+
+def test_multi_line_quotes_match_line_by_line():
+    from jev_ultrafast.contracts import evidence_holds
+
+    text = "Search Results For\nbanana bread\nJanet's Rich Banana Bread\n4,500 Ratings"
+    assert evidence_holds(["Search Results For\nJanet's Rich Banana Bread"], text)
+
+
+def test_checkpoint_url_is_a_wall():
+    from jev_ultrafast.browser import bot_wall
+
+    assert bot_wall({"url": "https://www.shop.test/checkpoint?ref=x", "title": "Shop", "text": "Continue"})
